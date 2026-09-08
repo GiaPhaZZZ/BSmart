@@ -1,4 +1,4 @@
-# Smart Glasses
+# BSmart
 
 A lightweight multimodal AI pipeline for smart glasses, designed to provide **voice interaction, visual question answering, and navigation assistance for blind users**.
 

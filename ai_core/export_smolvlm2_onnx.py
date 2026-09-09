@@ -85,13 +85,22 @@ def export_metadata(output_dir: Path) -> Path:
         "vision_input_shape": [1, 3, 384, 384],
         "image_mean": [0.48145466, 0.4578275, 0.40821073],
         "image_std": [0.26862954, 0.26130258, 0.27577711],
-        "max_seq_len": 256,
+        "max_seq_len": 35,
         "language": "vi",
         "system_prompt": (
             "Bạn là trợ lý thị giác thông minh cho người khiếm thị BSmart. "
             "Hãy mô tả bức ảnh hoặc trả lời câu hỏi một cách ngắn gọn, rõ ràng bằng tiếng Việt."
         ),
         "tts_prefix_template": "Trước mặt bạn là {answer}",
+        "optimizations": {
+            "on_demand_only": True,
+            "resolution_preset": [256, 256],
+            "max_output_tokens": 35,
+            "quantization": "INT8",
+            "threads": 2,
+            "async_execution": True,
+            "memory_recycling": True
+        },
         "status": "ready_for_on_device_inference"
     }
 

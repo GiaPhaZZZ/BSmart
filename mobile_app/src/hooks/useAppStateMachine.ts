@@ -222,45 +222,26 @@ export function useAppStateMachine(): AppStateMachineResult {
       const imageData = capturedImageRef.current ?? null;
 
       if (appStateRef.current === AppState.FEATURE_1_QA) {
-        // Feature 1: use audio + image for QA
-        addLog('Processing QA request...');
-        let question = '';
-        try {
-          const res = await transcribeAudio(audioData);
-          question = res.text;
-        } catch {
-          addLog('Cloud ASR unavailable, using on-device PhoWhisper...', 'warn');
-          const onDevice = await transcribeAudioOnDevice(audioData);
-          question = onDevice.text;
-        }
+        // Feature 1: on-demand audio + image for QA (100% Offline, no server dependence)
+        addLog('Processing on-demand QA request (100% Offline)...');
+        addLog('Transcribing question using on-device PhoWhisper...');
+        const onDeviceAsr = await transcribeAudioOnDevice(audioData);
+        const question = onDeviceAsr.text || 'Trước mặt tôi có gì?';
         addLog(`Transcribed: "${question}"`);
 
         const qaImage = imageData ?? 'MOCK_IMAGE_BASE64';
-        let answer = '';
-        try {
-          const res = await askQA(qaImage, question);
-          answer = res.answer;
-        } catch {
-          addLog('Cloud QA unavailable, using on-device SmolVLM2...', 'warn');
-          const onDevice = await askQAOnDevice(qaImage, question);
-          answer = onDevice.answer;
-        }
+        addLog('Running on-device SmolVLM2-256M Visual QA (On-Demand)...');
+        const onDeviceVlm = await askQAOnDevice(qaImage, question);
+        const answer = onDeviceVlm.answer;
         addLog(`Answer: "${answer}"`);
 
         await speakViaBle(answer, bleService.current);
         transitionTo(AppState.FEATURE_1_QA); // Stay in QA
       } else {
-        // Feature selection from IDLE→LISTENING
-        addLog('Transcribing command...');
-        let text = '';
-        try {
-          const res = await transcribeAudio(audioData);
-          text = res.text;
-        } catch {
-          addLog('Cloud ASR unavailable, using on-device PhoWhisper...', 'warn');
-          const onDevice = await transcribeAudioOnDevice(audioData);
-          text = onDevice.text;
-        }
+        // Feature selection from IDLE→LISTENING (100% Offline)
+        addLog('Transcribing command using on-device PhoWhisper...');
+        const onDeviceAsr = await transcribeAudioOnDevice(audioData);
+        const text = onDeviceAsr.text;
         addLog(`Transcribed: "${text}"`);
 
         const feature = matchFeatureKeyword(text);

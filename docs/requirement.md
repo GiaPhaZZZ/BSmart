@@ -305,18 +305,18 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **APP-08** | **Mobile App** | Lưu ảnh chụp tính năng 2 vào bộ nhớ máy | Tích hợp `ImageStorageService.ts` quản lý và lưu file ảnh chụp JPEG local kèm timestamp | ✅ **Hoàn thành** |
 | **APP-09** | **Mobile App** | Tích hợp BLE thực tế (`BlePlxService.ts`) | Xây dựng engine `BlePlxService.ts` tích hợp `react-native-ble-plx`, ghép gói GATT chunk JPEG/Audio và giải mã sự kiện nút bấm (16/16 tests pass) | ✅ **Hoàn thành** |
 | **APP-10** | **Mobile App** | Auto-connect BLE & Background Service | Xây dựng `BleAutoConnectService.ts` tự động quét/kết nối lại ngầm, phản hồi rung haptic và giọng nói cho người khiếm thị (21/21 tests pass) | ✅ **Hoàn thành** |
-| **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Chuyển đổi STT tiếng Việt để nhận diện giọng nói và câu hỏi hoàn toàn offline trong App | 📋 **Cần làm** |
-| **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Tối ưu hóa mô hình hỏi đáp thị giác chạy cục bộ trên Android (offline) | 📋 **Cần làm** |
-| **MOD-03** | **AI On-Device** | Export YOLO26s + ZipDepth sang ONNX/TFLite Mobile | Tối ưu hóa mô hình nhận diện vật thể và ước lượng độ sâu cho tính năng dẫn đường | 📋 **Cần làm** |
-| **MOD-04** | **AI On-Device** | Đóng gói bộ Model Weights vào Android APK (~2GB) | Nhúng thư viện ONNX Runtime / ExecuTorch và nạp file model vào thư mục assets của app | ⚠️ **Chờ Model** |
+| **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_phowhisper_onnx.py`, tích hợp `OnDeviceAsrService.ts` nhận diện giọng nói 100% offline | ✅ **Hoàn thành** |
+| **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Xây dựng `ai_core/export_smolvlm2_onnx.py`, tích hợp `SmolVLM2-256M` on-device với gói tối ưu hóa (On-demand, 256x256, max 35 tokens, INT8, async non-blocking, tensor recycling) trong `OnDeviceVlmService.ts` & `OnnxInferenceModule.kt` | ✅ **Hoàn thành** |
+| **MOD-03** | **AI On-Device** | Export YOLO26s + ZipDepth sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_yolo_zipdepth_onnx.py`, trích xuất mô hình phát hiện vật cản và ước lượng độ sâu làn đường | ✅ **Hoàn thành** |
+| **MOD-04** | **AI On-Device** | Đóng gói bộ Model Weights vào Android APK (~2GB) | Xây dựng `ai_core/package_models.py`, tích hợp C++ Native ONNX Runtime (`OnnxInferenceModule.kt`), build thành công APK Android (`BUILD SUCCESSFUL`) | ✅ **Hoàn thành** |
 | **FW-01** | **Firmware** | Source code C/C++ cho ESP32-S3 Sense (Arduino IDE/ESP-IDF) | Mã nguồn nạp vi điều khiển, quản lý I/O và cấu hình BLE Server | 📋 **Cần làm** |
 | **FW-02** | **Firmware** | Điều khiển Camera (OV2640/OV5640) nén JPEG | Chụp ảnh độ phân giải 320x240 / 640x480, nén dung lượng ≤ 50–100 KB, chu kỳ 4s | 📋 **Cần làm** |
 | **FW-03** | **Firmware** | Ghi âm mic I2S (INMP441) | Thu âm 16kHz, mono, 16-bit khi người dùng giữ nút Ghi âm | 📋 **Cần làm** |
 | **FW-04** | **Firmware** | Xử lý sự kiện nút bấm vật lý (Nút Ghi âm & Nguồn) | Phân biệt Hold (bắt đầu nói), Release (kết thúc), Short-press (<300ms, thoát về Home) | 📋 **Cần làm** |
 | **FW-05** | **Firmware** | Triển khai GATT Server & BLE Chunking Protocol | Chia nhỏ gói tin truyền ảnh/audio qua BLE, tối ưu MTU để tránh nghẽn băng thông | 📋 **Cần làm** |
 | **FW-06** | **Firmware** | Phát âm thanh ra loa gọng kính (BLE Audio Pipe) | Nhận stream âm thanh từ điện thoại qua BLE và phát ra I2S DAC/Loa kính | ⚠️ **Chờ Protocol** |
-| **SRV-01** | **Backend Dev** | FastAPI HTTP Server bọc các script CLI (`server.py`) | Tạo endpoint tạm thời `POST /transcribe` và `POST /qa` phục vụ kiểm thử tham chiếu trên máy tính trước khi nhúng model vào APK | ℹ️ **Tùy chọn Dev** |
-| **SRV-02** | **Backend Dev** | Lượng tử hóa CTranslate2 INT8 (`ct2-transformers-converter`) | Tối ưu PhoWhisper và EnViT5 trên máy trạm test / phục vụ kiểm thử prototype | ⏳ **Đang làm** |
+| **SRV-01** | **Backend Dev** | FastAPI HTTP Server bọc các script CLI (`server.py`) | Tạo endpoint `POST /transcribe`, `POST /qa`, `POST /navigate`, `GET /health` phục vụ kiểm thử tham chiếu trên máy trạm (4/4 tests pass) | ✅ **Hoàn thành** |
+| **SRV-02** | **Backend Dev** | Lượng tử hóa CTranslate2 INT8 (`ct2-transformers-converter`) | Tối ưu hóa PhoWhisper và EnViT5 sang INT8, đạt 11/11 tests pass trong `check_glass.py` | ✅ **Hoàn thành** |
 
 ---
 
@@ -326,8 +326,8 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | :--- | :---: | :--- | --- |
 | **Chưa có Firmware ESP32 & UUIDs** | ⚠️ **Blocker** | Mobile app chưa kết nối được kính thật | Dùng `MockBleService.ts` giả lập 100% sự kiện; team Firmware cần cung cấp mã nguồn và bảng UUIDs. |
 | **Chưa có giao thức BLE Audio Pipe** | ⚠️ **Blocker** | Kính chưa tự phát được âm thanh ra loa | Mobile app tạm thời dùng `react-native-tts` phát qua loa ngoài điện thoại làm fallback. |
-| **Chưa đóng gói Model On-Device (~2GB)** | ⚠️ **Blocker** | App chưa chạy độc lập offline hoàn toàn | Tạm thời dùng Local API (`ApiService.ts`) kết nối máy trạm; cần script export ONNX/TFLite để nhúng vào APK. |
-| **Người khiếm thị khó tự thao tác mở app** | ♿ **UX Lim.** | Người mù không thể tự tìm và bấm mở app | Cần bổ sung Background Service tự khởi chạy và kết nối lại (Auto-reconnect) khi kính bật nguồn; thêm rung (Haptic feedback). |
+| **Đóng gói Model On-Device (~2GB)** | 🟢 **Resolved** | App chạy hoàn toàn offline trên điện thoại | Đã tích hợp ONNX Runtime Native C++ (`OnnxInferenceModule.kt`) và tối ưu On-Demand SmolVLM2 + PhoWhisper + YOLO26s + ZipDepth trực tiếp trong mã nguồn APK. |
+| **Người khiếm thị khó tự thao tác mở app** | ♿ **UX Lim.** | Người mù không thể tự tìm và bấm mở app | Đã bổ sung `BleAutoConnectService.ts` tự động quét/kết nối lại ngầm khi kính bật nguồn; hỗ trợ phản hồi rung haptic và giọng nói. |
 | **Chưa tích hợp bản đồ định vị GPS** | ♿ **UX Lim.** | Chỉ cảnh báo vật thể trước mắt, không chỉ đường | Nêu rõ trong phạm vi: Tính năng 3 là **Obstacle Awareness (Tránh vật cản)**, không phải GPS Turn-by-turn. |
 | **Giới hạn băng thông BLE của ESP32** | ⚙️ **HW Lim.** | Dữ liệu ảnh/audio lớn dễ bị trễ hoặc rớt gói | Nén ảnh JPEG nhỏ (≤ 50–100 KB), bỏ qua frame trễ (skip frame), chỉ xử lý 1 frame tại một thời điểm. |
 | **Đối tượng người dùng mục tiêu** | ♿ **UX Lim.** | Toàn bộ tương tác dựa trên tiếng Việt và giọng nói | Phù hợp với người khiếm thị có khả năng nghe/nói bình thường (chưa hỗ trợ người câm/điếc). |

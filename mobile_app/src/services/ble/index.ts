@@ -26,3 +26,5 @@ export function getMockBleService(): MockBleService | null {
   const svc = getBleService();
   return svc instanceof MockBleService ? svc : null;
 }
+
+export { BleAutoConnectService } from './BleAutoConnectService';

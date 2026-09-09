@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, BleConnectionState, LogEntry } from '../types';
-import { getBleService, getMockBleService } from '../services/ble';
+import { getBleService, getMockBleService, BleAutoConnectService } from '../services/ble';
 import { transcribeAudio, askQA } from '../services/api/ApiService';
 import { speakViaBle, speakUrgent, stopSpeaking } from '../services/tts/TtsService';
 import {
@@ -352,7 +352,11 @@ export function useAppStateMachine(): AppStateMachineResult {
       }
     });
 
+    const autoConnect = new BleAutoConnectService(svc);
+    autoConnect.start(msg => addLog(msg));
+
     return () => {
+      autoConnect.stop();
       unsubButton();
       unsubImage();
       unsubAudio();

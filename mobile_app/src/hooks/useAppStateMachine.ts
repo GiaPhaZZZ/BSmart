@@ -14,6 +14,10 @@ import {
   warningsToVietnamese,
   resetCooldowns,
 } from '../services/navigation/NavigationEngine';
+import {
+  runInference,
+  isInferenceAvailable,
+} from '../services/navigation/OnDeviceInference';
 import { NAVIGATION_FRAME_INTERVAL_MS } from '../constants/navigationRules';
 
 function generateId(): string {
@@ -132,7 +136,7 @@ export function useAppStateMachine(): AppStateMachineResult {
     }
   }
 
-  async function processNavigationImage(_imageBase64: string) {
+  async function processNavigationImage(imageBase64: string) {
     if (isProcessingFrame.current) {
       addLog('Nav: skipping frame (prev still processing)', 'warn');
       return;
@@ -141,21 +145,32 @@ export function useAppStateMachine(): AppStateMachineResult {
 
     isProcessingFrame.current = true;
     try {
-      // TODO: Run YOLO26s + ZipDepth on-device here
-      // For MVP mock: generate a dummy detected object to test flow
-      const mockObjects = [
-        {
-          class: 'person',
-          confidence: 0.85,
-          x: 0.5, // center
-          y: 0.5,
-          width: 0.2,
-          height: 0.4,
-          depthScore: 0.2, // near
-        },
-      ];
+      let detectedObjects;
 
-      const warnings = processNavigationFrame(mockObjects);
+      if (isInferenceAvailable()) {
+        // Real on-device inference path (unblocked once models are available)
+        const result = await runInference(imageBase64);
+        detectedObjects = result.objects;
+        addLog(`Nav: inference found ${detectedObjects.length} object(s)`);
+      } else {
+        // BLOCKED: On-device models not yet available.
+        // Using mock data to keep navigation flow testable.
+        // Replace this block when OnDeviceInference is unblocked.
+        addLog('Nav: inference BLOCKED — using mock data', 'warn');
+        detectedObjects = [
+          {
+            class: 'person',
+            confidence: 0.85,
+            x: 0.5,
+            y: 0.5,
+            width: 0.2,
+            height: 0.4,
+            depthScore: 0.2,
+          },
+        ];
+      }
+
+      const warnings = processNavigationFrame(detectedObjects);
       const text = warningsToVietnamese(warnings);
 
       if (text) {

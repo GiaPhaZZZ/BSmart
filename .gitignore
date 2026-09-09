@@ -45,6 +45,7 @@ mobile_app/android/.gradle/
 mobile_app/android/build/
 mobile_app/android/app/build/
 mobile_app/android/.idea/
+**/.cxx/
 *.apk
 *.aab
 *.ap_

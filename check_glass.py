@@ -8,9 +8,11 @@ Run with the glass interpreter:
 All file paths below are resolved relative to THIS SCRIPT'S location
 (not the current working directory), so it's safe to run from anywhere.
 """
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+os.environ.setdefault("HF_HOME", str(BASE_DIR / ".cache" / "huggingface"))
 
 ok, fail = [], []
 

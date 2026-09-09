@@ -14,12 +14,15 @@ exactly where check_glass.py will look for it.
   official rhasspy/piper-voices set (single-speaker, 63MB). Other Vietnamese
   options if you want to compare: vi_VN-25hours_single-low, vi_VN-vivos-x_low.
 """
+import os
 from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+os.environ.setdefault("HF_HOME", str(BASE_DIR / ".cache" / "huggingface"))
+
 from huggingface_hub import snapshot_download
 from ultralytics import YOLO
 from piper.download_voices import download_voice
-
-BASE_DIR = Path(__file__).resolve().parent
 
 MODELS = [
     "vinai/PhoWhisper-tiny",

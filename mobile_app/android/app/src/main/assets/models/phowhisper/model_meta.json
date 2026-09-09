@@ -1,0 +1,25 @@
+{
+  "model_name": "PhoWhisper-tiny",
+  "task": "speech_to_text",
+  "sample_rate": 16000,
+  "n_mels": 80,
+  "n_fft": 400,
+  "hop_length": 160,
+  "chunk_length_s": 30,
+  "input_shape": [
+    1,
+    80,
+    3000
+  ],
+  "language": "vi",
+  "keywords": {
+    "tính năng 1": "FEATURE_1_QA",
+    "tính năng một": "FEATURE_1_QA",
+    "gpt": "FEATURE_1_QA",
+    "tính năng 2": "FEATURE_2_CAPTURE",
+    "tính năng hai": "FEATURE_2_CAPTURE",
+    "tính năng 3": "FEATURE_3_NAVIGATION",
+    "tính năng ba": "FEATURE_3_NAVIGATION"
+  },
+  "status": "ready_for_on_device_inference"
+}

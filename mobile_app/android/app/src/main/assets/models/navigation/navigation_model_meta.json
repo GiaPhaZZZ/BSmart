@@ -1,0 +1,44 @@
+{
+  "models": {
+    "yolo": {
+      "name": "yolo26s",
+      "filename": "yolo26s.onnx",
+      "input_name": "images",
+      "output_name": "output0",
+      "input_shape": [
+        1,
+        3,
+        640,
+        640
+      ],
+      "confidence_threshold": 0.5,
+      "iou_threshold": 0.45,
+      "num_classes": 80
+    },
+    "zipdepth": {
+      "name": "zipdepth_base_npu",
+      "filename": "zipdepth.onnx",
+      "input_name": "image",
+      "output_name": "depth",
+      "input_shape": [
+        1,
+        3,
+        384,
+        384
+      ],
+      "scale_type": "relative_inverse_depth",
+      "near_threshold": 0.4
+    }
+  },
+  "navigation_rules": {
+    "grid_horizontal": {
+      "left": 0.33,
+      "center": 0.66,
+      "right": 1.0
+    },
+    "cooldown_seconds": 8,
+    "cycle_seconds": 4,
+    "max_reported_objects": 2,
+    "template": "Lưu ý, có {class} ở {position}, {distance}"
+  }
+}

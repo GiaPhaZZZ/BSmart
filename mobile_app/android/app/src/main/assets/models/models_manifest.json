@@ -1,0 +1,110 @@
+{
+  "project": "BSmart Multimodal Smart Glasses",
+  "version": "1.0.0",
+  "manifest_version": "1",
+  "platform": "android-arm64-v8a",
+  "runtime": "onnxruntime-mobile",
+  "models": {
+    "asr": {
+      "name": "PhoWhisper-tiny",
+      "encoder": "phowhisper/phowhisper_encoder.onnx",
+      "decoder": "phowhisper/phowhisper_decoder.onnx",
+      "vocab": "phowhisper/vocab.json",
+      "meta": "phowhisper/model_meta.json"
+    },
+    "vlm": {
+      "name": "SmolVLM2-256M",
+      "vision": "smolvlm2/smolvlm2_vision.onnx",
+      "lm": "smolvlm2/smolvlm2_lm.onnx",
+      "config": "smolvlm2/qa_config.json"
+    },
+    "navigation": {
+      "name": "YOLO26s_ZipDepth",
+      "detector": "navigation/yolo26s.onnx",
+      "depth": "navigation/zipdepth.onnx",
+      "labels": "navigation/coco_labels_vi.json",
+      "meta": "navigation/navigation_model_meta.json"
+    }
+  },
+  "files": [
+    {
+      "name": "coco_labels_vi.json",
+      "path": "navigation/coco_labels_vi.json",
+      "type": "config_metadata",
+      "size_bytes": 7481,
+      "sha256": "a5e82a83ccd2ba5815407141d0421e7ef304e7afaaa55109e6670646324017ac"
+    },
+    {
+      "name": "navigation_model_meta.json",
+      "path": "navigation/navigation_model_meta.json",
+      "type": "config_metadata",
+      "size_bytes": 949,
+      "sha256": "dde4ec4ffce0aabfe88cf9e99a3e712b735af750a554884d351bd9f7f7d5a501"
+    },
+    {
+      "name": "yolo26s.onnx",
+      "path": "navigation/yolo26s.onnx",
+      "type": "onnx_model",
+      "size_bytes": 180742351,
+      "sha256": "d7608844e03f23cd882be771a4c1690a01071c1d82486e74671ac1cc1a8a7901"
+    },
+    {
+      "name": "zipdepth.onnx",
+      "path": "navigation/zipdepth.onnx",
+      "type": "onnx_model",
+      "size_bytes": 212538,
+      "sha256": "d01da0401b2af6a3309776b4e777bfe216dc7fc2a465f509d3fea034cfc6be9b"
+    },
+    {
+      "name": "model_meta.json",
+      "path": "phowhisper/model_meta.json",
+      "type": "config_metadata",
+      "size_bytes": 605,
+      "sha256": "dba2d5969a41fe9150ac930b0fe127b440c9c69e1a54dc1957ecdb54340c4eb3"
+    },
+    {
+      "name": "phowhisper_decoder.onnx",
+      "path": "phowhisper/phowhisper_decoder.onnx",
+      "type": "onnx_model",
+      "size_bytes": 159330496,
+      "sha256": "a88e60c71f7095464d8601c1a0b0d32036bc1f8e7a06c371727c3465ec359192"
+    },
+    {
+      "name": "phowhisper_encoder.onnx",
+      "path": "phowhisper/phowhisper_encoder.onnx",
+      "type": "onnx_model",
+      "size_bytes": 2147315,
+      "sha256": "97cdabd37d0f7266a87396566bd587d209414d3df7238c742563bdc821f4de5b"
+    },
+    {
+      "name": "vocab.json",
+      "path": "phowhisper/vocab.json",
+      "type": "config_metadata",
+      "size_bytes": 342,
+      "sha256": "1242bf2747c5debc8a7f8c57d77955279bd14a5b161c82845ab0a23713f19b82"
+    },
+    {
+      "name": "qa_config.json",
+      "path": "smolvlm2/qa_config.json",
+      "type": "config_metadata",
+      "size_bytes": 678,
+      "sha256": "c9150ef7937c488ad1b0295a15870ae7d95ee7fee966bb6736b722bb83a85937"
+    },
+    {
+      "name": "smolvlm2_lm.onnx",
+      "path": "smolvlm2/smolvlm2_lm.onnx",
+      "type": "onnx_model",
+      "size_bytes": 227823049,
+      "sha256": "dab1e44ce33be2958f087974abaa22eb529ae8936793cf1b798fe73eb3bcbc61"
+    },
+    {
+      "name": "smolvlm2_vision.onnx",
+      "path": "smolvlm2/smolvlm2_vision.onnx",
+      "type": "onnx_model",
+      "size_bytes": 6681636,
+      "sha256": "009b580bb49da23a41302afe8fe0e671ea24d5b995c120442c10b4af5e213587"
+    }
+  ],
+  "total_files": 11,
+  "total_size_bytes": 576947440
+}

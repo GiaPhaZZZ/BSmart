@@ -17,6 +17,8 @@ ENV/
 *.tar.gz
 *.zip
 voices/
+exported_models/
+ai_core/exported_models/
 phowhisper-ct2-int8/
 envit5-ct2-int8/
 *.wav

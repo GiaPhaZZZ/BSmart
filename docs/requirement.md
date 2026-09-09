@@ -317,6 +317,7 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **FW-06** | **Firmware** | Phát âm thanh ra loa gọng kính (BLE Audio Pipe) | Nhận stream âm thanh từ điện thoại qua BLE và phát ra I2S DAC/Loa kính | ⚠️ **Chờ Protocol** |
 | **SRV-01** | **Backend Dev** | FastAPI HTTP Server bọc các script CLI (`server.py`) | Tạo endpoint `POST /transcribe`, `POST /qa`, `POST /navigate`, `GET /health` phục vụ kiểm thử tham chiếu trên máy trạm (4/4 tests pass) | ✅ **Hoàn thành** |
 | **SRV-02** | **Backend Dev** | Lượng tử hóa CTranslate2 INT8 (`ct2-transformers-converter`) | Tối ưu hóa PhoWhisper và EnViT5 sang INT8, đạt 11/11 tests pass trong `check_glass.py` | ✅ **Hoàn thành** |
+| **OPS-01** | **DevOps / CI-CD** | GitHub Actions Pipeline tự xuất file APK cho các phiên bản | Xây dựng `.github/workflows/build-apk.yml` tự động đóng gói, biên dịch APK Release/Debug và đính kèm trực tiếp vào GitHub Releases khi gắn tag phiên bản (`v*`) hoặc chạy manual | ✅ **Hoàn thành** |
 
 ---
 

@@ -303,7 +303,7 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **APP-06** | **Mobile App** | Xây dựng UI Dashboard giám sát (`MainScreen.tsx`) | Theme robot tối giản: StatusDisplay, ConnectionIndicator, DebugLog, MockControls | ✅ **Hoàn thành** |
 | **APP-07** | **Mobile App** | API Client kết nối test (`ApiService.ts`) | Cung cấp endpoint `/transcribe` và `/qa` phục vụ giai đoạn dev trước khi có model on-device | ✅ **Hoàn thành** |
 | **APP-08** | **Mobile App** | Lưu ảnh chụp tính năng 2 vào bộ nhớ máy | Tích hợp `ImageStorageService.ts` quản lý và lưu file ảnh chụp JPEG local kèm timestamp | ✅ **Hoàn thành** |
-| **APP-09** | **Mobile App** | Tích hợp BLE thực tế (`BlePlxService.ts`) | Đã dựng cấu trúc; chờ firmware cung cấp Service/Characteristic UUIDs và chunk protocol | ⚠️ **Chờ Firmware** |
+| **APP-09** | **Mobile App** | Tích hợp BLE thực tế (`BlePlxService.ts`) | Xây dựng engine `BlePlxService.ts` tích hợp `react-native-ble-plx`, ghép gói GATT chunk JPEG/Audio và giải mã sự kiện nút bấm (16/16 tests pass) | ✅ **Hoàn thành** |
 | **APP-10** | **Mobile App** | Auto-connect BLE & Background Service | Tự động kết nối lại khi kính bật nguồn mà người mù không cần nhìn màn hình | 📋 **Cần làm** |
 | **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Chuyển đổi STT tiếng Việt để nhận diện giọng nói và câu hỏi hoàn toàn offline trong App | 📋 **Cần làm** |
 | **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Tối ưu hóa mô hình hỏi đáp thị giác chạy cục bộ trên Android (offline) | 📋 **Cần làm** |

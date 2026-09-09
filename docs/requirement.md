@@ -38,11 +38,12 @@
 ```
 
 **Thay đổi kiến trúc quan trọng (Theo Ghi chú kỹ thuật):**
-Toàn bộ các mô hình AI được chuyển trực tiếp vào trong App điện thoại để chạy **On-Device (Offline 100%)**, không phụ thuộc vào kết nối mạng hay máy chủ Cloud. Điều này giúp hệ thống hoạt động ổn định mọi lúc, bảo mật dữ liệu và phản hồi tức thì cho người khiếm thị. Dung lượng file cài đặt ứng dụng (APK) dự kiến sẽ nặng khoảng **~2GB** do đóng gói kèm trọng số các mô hình AI.
+Toàn bộ các mô hình AI được chuyển trực tiếp vào trong App điện thoại Android để chạy **On-Device (Offline 100%)**, không phụ thuộc vào kết nối mạng, máy chủ Cloud hay máy chủ Python ngoài. App Android đảm nhận vai trò **tất cả trong một (All-in-One: Frontend UI + Backend AI Engine chạy ngầm bằng CPU/NPU điện thoại)**. Dung lượng file cài đặt ứng dụng (APK) dự kiến sẽ nặng khoảng **~2GB** do đóng gói kèm trọng số các mô hình AI.
 
-- **Kính ESP32-S3:** Đóng vai trò thu nhận I/O (chụp ảnh, ghi âm mic I2S, phát âm thanh ra loa gọng kính, gửi sự kiện nút bấm vật lý). **Không xử lý AI.**
-- **App điện thoại (Android):** Trung tâm xử lý duy nhất — nhận dữ liệu từ kính qua BLE, chạy toàn bộ các model AI on-device (PhoWhisper, SmolVLM2, YOLO26s, ZipDepth), quản lý state machine, tổng hợp giọng nói tiếng Việt (TTS) và truyền ngược âm thanh về loa kính.
-- **Cloud:** **Không sử dụng trong kiến trúc vận hành chính thức.** (Giai đoạn phát triển/kiểm thử có thể tạm dùng Local Server API làm cầu nối trung gian trong khi chờ hoàn thiện đóng gói model vào APK).
+- **Kính ESP32-S3:** Đóng vai trò thiết bị ngoại vi thu nhận I/O (chụp ảnh, ghi âm mic I2S, phát âm thanh ra loa gọng kính, gửi sự kiện nút bấm vật lý qua kết nối Bluetooth BLE). **Không xử lý AI.**
+- **App điện thoại Android (All-in-One):** Trung tâm xử lý duy nhất — nhận dữ liệu từ kính qua Bluetooth BLE, chạy toàn bộ các model AI on-device ngầm bằng CPU điện thoại (PhoWhisper, SmolVLM2, YOLO26s, ZipDepth), quản lý state machine, tổng hợp giọng nói tiếng Việt (TTS) và truyền ngược âm thanh về loa kính.
+- **Các file Python Script (`Function0`, `Function1`, `Function2`, `download_models.py`):** Đóng vai trò là **Mã nguồn tham chiếu (Reference Prototypes)** trên máy tính để kiểm thử thuật toán và làm công cụ export mô hình sang định dạng ONNX/TFLite/ExecuTorch cho điện thoại, KHÔNG phải là web server vận hành ứng dụng.
+- **Cloud / Python Web Server:** **Không sử dụng trong kiến trúc vận hành chính thức.** Hệ thống vận hành hoàn toàn độc lập, offline 100% trên điện thoại.
 
 ### 2.1 Giao thức Bluetooth
 
@@ -301,7 +302,7 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **APP-05** | **Mobile App** | Xây dựng Mock BLE Service (`MockBleService.ts`) | Giả lập 100% sự kiện nút bấm, truyền ảnh, audio và phát audio trên Emulator | ✅ **Hoàn thành** |
 | **APP-06** | **Mobile App** | Xây dựng UI Dashboard giám sát (`MainScreen.tsx`) | Theme robot tối giản: StatusDisplay, ConnectionIndicator, DebugLog, MockControls | ✅ **Hoàn thành** |
 | **APP-07** | **Mobile App** | API Client kết nối test (`ApiService.ts`) | Cung cấp endpoint `/transcribe` và `/qa` phục vụ giai đoạn dev trước khi có model on-device | ✅ **Hoàn thành** |
-| **APP-08** | **Mobile App** | Lưu ảnh chụp tính năng 2 vào bộ nhớ máy | Lưu ảnh JPEG vào internal storage / gallery của Android khi người dùng chụp ảnh | ⏳ **Đang làm** |
+| **APP-08** | **Mobile App** | Lưu ảnh chụp tính năng 2 vào bộ nhớ máy | Tích hợp `ImageStorageService.ts` quản lý và lưu file ảnh chụp JPEG local kèm timestamp | ✅ **Hoàn thành** |
 | **APP-09** | **Mobile App** | Tích hợp BLE thực tế (`BlePlxService.ts`) | Đã dựng cấu trúc; chờ firmware cung cấp Service/Characteristic UUIDs và chunk protocol | ⚠️ **Chờ Firmware** |
 | **APP-10** | **Mobile App** | Auto-connect BLE & Background Service | Tự động kết nối lại khi kính bật nguồn mà người mù không cần nhìn màn hình | 📋 **Cần làm** |
 | **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Chuyển đổi STT tiếng Việt để nhận diện giọng nói và câu hỏi hoàn toàn offline trong App | 📋 **Cần làm** |
@@ -314,8 +315,8 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **FW-04** | **Firmware** | Xử lý sự kiện nút bấm vật lý (Nút Ghi âm & Nguồn) | Phân biệt Hold (bắt đầu nói), Release (kết thúc), Short-press (<300ms, thoát về Home) | 📋 **Cần làm** |
 | **FW-05** | **Firmware** | Triển khai GATT Server & BLE Chunking Protocol | Chia nhỏ gói tin truyền ảnh/audio qua BLE, tối ưu MTU để tránh nghẽn băng thông | 📋 **Cần làm** |
 | **FW-06** | **Firmware** | Phát âm thanh ra loa gọng kính (BLE Audio Pipe) | Nhận stream âm thanh từ điện thoại qua BLE và phát ra I2S DAC/Loa kính | ⚠️ **Chờ Protocol** |
-| **SRV-01** | **Backend Dev** | FastAPI HTTP Server bọc các script CLI hiện có | Tạo endpoint tạm thời `POST /transcribe` và `POST /qa` để test tích hợp trước khi có model on-device | 📋 **Cần làm** |
-| **SRV-02** | **Backend Dev** | Lượng tử hóa CTranslate2 INT8 (`ct2-transformers-converter`) | Tối ưu PhoWhisper và EnViT5 để tăng tốc độ inference trên máy trạm test | ⏳ **Đang làm** |
+| **SRV-01** | **Backend Dev** | FastAPI HTTP Server bọc các script CLI (`server.py`) | Tạo endpoint tạm thời `POST /transcribe` và `POST /qa` phục vụ kiểm thử tham chiếu trên máy tính trước khi nhúng model vào APK | ℹ️ **Tùy chọn Dev** |
+| **SRV-02** | **Backend Dev** | Lượng tử hóa CTranslate2 INT8 (`ct2-transformers-converter`) | Tối ưu PhoWhisper và EnViT5 trên máy trạm test / phục vụ kiểm thử prototype | ⏳ **Đang làm** |
 
 ---
 

@@ -19,6 +19,7 @@ import {
   isInferenceAvailable,
 } from '../services/navigation/OnDeviceInference';
 import { NAVIGATION_FRAME_INTERVAL_MS } from '../constants/navigationRules';
+import { saveCapturedImage } from '../services/storage/ImageStorageService';
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -285,10 +286,8 @@ export function useAppStateMachine(): AppStateMachineResult {
   async function captureAndSave() {
     try {
       addLog('Feature 2: capturing image...');
-      // In real implementation: request image from glasses via BLE
-      // For MVP: use captured image from BLE callback or mock (logged)
-      addLog(`Feature 2: saving image (${capturedImageRef.current ? 'real' : 'mock'})`);
-      addLog('Feature 2: image saved locally (mock)');
+      const savedFilename = await saveCapturedImage(capturedImageRef.current);
+      addLog(`Feature 2: image saved to local storage (${savedFilename})`);
       await speakViaBle(
         'Đã hoàn thành, bạn muốn chọn tính năng nào tiếp theo',
         bleService.current,

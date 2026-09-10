@@ -66,6 +66,8 @@ Toàn bộ các mô hình AI được chuyển trực tiếp vào trong App đi�
 | Audio ghi âm (kính → app) | PCM/WAV, 16 kHz, mono, 16-bit | Đầu vào cho model transcribe on-device (PhoWhisper) |
 | Audio TTS (app → kính) | PCM 16kHz / Opus | Mục tiêu truyền về loa kính; hiện app dùng TTS loa điện thoại làm fallback |
 | TTS engine | `react-native-tts` | Giọng tiếng Việt (`vi-VN`) của Android TTS engine, có hỗ trợ cancel và event listener |
+| Âm thanh kích hoạt tính năng | MP3 (`activate_voice/`) | Đóng gói vào Android `res/raw/` phát qua `AudioPlayerModule` (Kotlin) và bắn trigger BLE `CMD:PLAY_F*` |
+
 
 ### 2.3 Kiến trúc xử lý On-Device & Lưu trữ
 

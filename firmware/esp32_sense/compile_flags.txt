@@ -3,3 +3,5 @@
 -DARDUINO=10800
 -DESP32
 -w
+-ferror-limit=0
+-fsyntax-only

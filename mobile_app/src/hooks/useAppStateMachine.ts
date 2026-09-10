@@ -12,6 +12,10 @@ import { transcribeAudioOnDevice } from '../services/ai/OnDeviceAsrService';
 import { askQAOnDevice } from '../services/ai/OnDeviceVlmService';
 import { speakViaBle, speakUrgent, stopSpeaking } from '../services/tts/TtsService';
 import {
+  playFeatureActivationSound,
+  stopFeatureSound,
+} from '../services/audio/SoundEffectService';
+import {
   processNavigationFrame,
   warningsToVietnamese,
   resetCooldowns,
@@ -116,6 +120,7 @@ export function useAppStateMachine(): AppStateMachineResult {
   // ─── Return to IDLE (short press handler) ───────────────────────────
   const returnToIdle = useCallback(async () => {
     stopSpeaking();
+    stopFeatureSound();
     stopNavigation();
     resetCooldowns();
     transitionTo(AppState.IDLE);
@@ -257,21 +262,15 @@ export function useAppStateMachine(): AppStateMachineResult {
 
         if (feature === 'feature1') {
           transitionTo(AppState.FEATURE_1_QA);
-          await speakViaBle(
-            'Đã vào tính năng 1, hỏi đáp, đã sẵn sàng',
-            bleService.current,
-          );
+          await playFeatureActivationSound('feature1', bleService.current);
         } else if (feature === 'feature2') {
           transitionTo(AppState.FEATURE_2_CAPTURE);
-          await speakViaBle('Đã vào tính năng 2, chụp ảnh', bleService.current);
+          await playFeatureActivationSound('feature2', bleService.current);
           // Feature 2: capture + save
           await captureAndSave();
         } else if (feature === 'feature3') {
           transitionTo(AppState.FEATURE_3_NAVIGATION);
-          await speakViaBle(
-            'Đã vào tính năng 3, chế độ dẫn đường',
-            bleService.current,
-          );
+          await playFeatureActivationSound('feature3', bleService.current);
           startNavigation();
         }
       }

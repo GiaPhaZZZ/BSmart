@@ -110,6 +110,12 @@ class AudioOutCallbacks : public BLECharacteristicCallbacks {
     } else if (value == "CAPTURE") {
       Serial.println("[App Command] Single capture requested");
       captureAndSendImage();
+    } else if (value == "CMD:PLAY_F1") {
+      Serial.println("[BLE Audio Out] Trigger activation sound: Feature 1 (Chatbot / Hỏi đáp)");
+    } else if (value == "CMD:PLAY_F2") {
+      Serial.println("[BLE Audio Out] Trigger activation sound: Feature 3 (Dẫn đường / Autopilot)");
+    } else if (value == "CMD:PLAY_F4") {
+      Serial.println("[BLE Audio Out] Trigger activation sound: Feature 2 (Chụp ảnh)");
     } else {
       // Streamed TTS audio payload
       Serial.printf("[BLE Audio Out] Received %u bytes audio data from App\n",

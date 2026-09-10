@@ -82,3 +82,4 @@ firmware/**/build/
 .DS_Store
 Thumbs.db
 agent/
+ZipDepth/

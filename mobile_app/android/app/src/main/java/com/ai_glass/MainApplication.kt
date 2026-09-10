@@ -16,6 +16,8 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           // Register BSmart native ONNX Runtime module
           add(com.ai_glass.onnx.OnnxInferencePackage())
+          // Register BSmart native Audio Player module for activation voice clips
+          add(com.ai_glass.audio.AudioPlayerPackage())
         },
     )
   }

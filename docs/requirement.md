@@ -309,12 +309,15 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Xây dựng `ai_core/export_smolvlm2_onnx.py`, tích hợp `SmolVLM2-256M` on-device với gói tối ưu hóa (On-demand, 256x256, max 35 tokens, INT8, async non-blocking, tensor recycling) trong `OnDeviceVlmService.ts` & `OnnxInferenceModule.kt` | ✅ **Hoàn thành** |
 | **MOD-03** | **AI On-Device** | Export YOLO26s + ZipDepth sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_yolo_zipdepth_onnx.py`, trích xuất mô hình phát hiện vật cản và ước lượng độ sâu làn đường | ✅ **Hoàn thành** |
 | **MOD-04** | **AI On-Device** | Đóng gói bộ Model Weights vào Android APK (~2GB) | Xây dựng `ai_core/package_models.py`, tích hợp C++ Native ONNX Runtime (`OnnxInferenceModule.kt`), build thành công APK Android (`BUILD SUCCESSFUL`) | ✅ **Hoàn thành** |
-| **FW-01** | **Firmware** | Source code C/C++ cho ESP32-S3 Sense (Arduino IDE/ESP-IDF) | Mã nguồn nạp vi điều khiển, quản lý I/O và cấu hình BLE Server | 📋 **Cần làm** |
-| **FW-02** | **Firmware** | Điều khiển Camera (OV2640/OV5640) nén JPEG | Chụp ảnh độ phân giải 320x240 / 640x480, nén dung lượng ≤ 50–100 KB, chu kỳ 4s | 📋 **Cần làm** |
-| **FW-03** | **Firmware** | Ghi âm mic I2S (INMP441) | Thu âm 16kHz, mono, 16-bit khi người dùng giữ nút Ghi âm | 📋 **Cần làm** |
-| **FW-04** | **Firmware** | Xử lý sự kiện nút bấm vật lý (Nút Ghi âm & Nguồn) | Phân biệt Hold (bắt đầu nói), Release (kết thúc), Short-press (<300ms, thoát về Home) | 📋 **Cần làm** |
-| **FW-05** | **Firmware** | Triển khai GATT Server & BLE Chunking Protocol | Chia nhỏ gói tin truyền ảnh/audio qua BLE, tối ưu MTU để tránh nghẽn băng thông | 📋 **Cần làm** |
+| **FW-01** | **Firmware** | Source code C/C++ cho ESP32-S3 Sense (Arduino IDE/ESP-IDF) | Mã nguồn nạp vi điều khiển, quản lý I/O và cấu hình BLE Server (`firmware/esp32_sense/bsmart_esp32_sense.ino`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
+| **FW-02** | **Firmware** | Điều khiển Camera (OV2640/OV5640) nén JPEG | Chụp ảnh độ phân giải 320x240 / 640x480, nén dung lượng ≤ 50–100 KB, phân mảnh gói BLE (`seq:total:payload`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
+| **FW-03** | **Firmware** | Ghi âm mic I2S (INMP441 / PDM Onboard) | Thu âm 16kHz, mono, 16-bit khi người dùng giữ nút Ghi âm và stream Base64 qua BLE | ✅ **Đã code C++** *(Chờ nạp mạch)* |
+| **FW-04** | **Firmware** | Xử lý sự kiện nút bấm vật lý (Nút Ghi âm & Nguồn) | Phân biệt Hold (bắt đầu nói), Release (kết thúc), Short-press (<300ms, thoát về Home) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
+| **FW-05** | **Firmware** | Triển khai GATT Server & BLE Chunking Protocol | Chia nhỏ gói tin truyền ảnh/audio qua BLE, tối ưu MTU để tránh nghẽn băng thông | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-06** | **Firmware** | Phát âm thanh ra loa gọng kính (BLE Audio Pipe) | Nhận stream âm thanh từ điện thoại qua BLE và phát ra I2S DAC/Loa kính | ⚠️ **Chờ Protocol** |
+| **HW-01** | **Hardware/IoT** | Nạp vi điều khiển & kiểm thử phần cứng vật lý | Nạp code qua Arduino IDE (bật OPI PSRAM), kiểm tra Serial Monitor 115200, test Camera OV2640 & PDM mic | ⏳ **Sắp làm** *(Cần board vật lý)* |
+| **INT-01** | **Tích hợp** | Kiểm thử liên thông BLE thực tế Kính ↔ Điện thoại | Đo đạc trễ truyền nhận ảnh JPEG 320x240, audio WAV 16kHz, tỷ lệ rớt gói và tối ưu kích thước chunk/MTU | ⏳ **Sắp làm** *(Sau khi có board)* |
+| **CAL-01** | **Thực địa** | Hiệu chuẩn thực địa (Field Calibration) | Thử nghiệm lọc ồn mic ngoài đường, ánh sáng camera thực tế, cân chỉnh khoảng cách ZipDepth | ⏳ **Sắp làm** |
 | **SRV-01** | **Backend Dev** | FastAPI HTTP Server bọc các script CLI (`server.py`) | Tạo endpoint `POST /transcribe`, `POST /qa`, `POST /navigate`, `GET /health` phục vụ kiểm thử tham chiếu trên máy trạm (4/4 tests pass) | ✅ **Hoàn thành** |
 | **SRV-02** | **Backend Dev** | Lượng tử hóa CTranslate2 INT8 (`ct2-transformers-converter`) | Tối ưu hóa PhoWhisper và EnViT5 sang INT8, đạt 11/11 tests pass trong `check_glass.py` | ✅ **Hoàn thành** |
 | **OPS-01** | **DevOps / CI-CD** | GitHub Actions Pipeline tự xuất file APK cho các phiên bản | Xây dựng `.github/workflows/build-apk.yml` tự động đóng gói, biên dịch APK Release/Debug và đính kèm trực tiếp vào GitHub Releases khi gắn tag phiên bản (`v*`) hoặc chạy manual | ✅ **Hoàn thành** |
@@ -325,7 +328,7 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 
 | Vấn đề / Giới hạn | Phân loại | Tác động thực tế | Giải pháp hiện tại & Khuyến nghị |
 | :--- | :---: | :--- | --- |
-| **Chưa có Firmware ESP32 & UUIDs** | ⚠️ **Blocker** | Mobile app chưa kết nối được kính thật | Dùng `MockBleService.ts` giả lập 100% sự kiện; team Firmware cần cung cấp mã nguồn và bảng UUIDs. |
+| **Chưa có Firmware ESP32 & UUIDs** | 🟢 **Resolved** | Mobile app đã có thể kết nối với kính thật | Đã triển khai đầy đủ mã nguồn C++ tại `firmware/esp32_sense/bsmart_esp32_sense.ino` đồng bộ 100% UUIDs và giao thức phân mảnh với `BlePlxService.ts`. |
 | **Chưa có giao thức BLE Audio Pipe** | ⚠️ **Blocker** | Kính chưa tự phát được âm thanh ra loa | Mobile app tạm thời dùng `react-native-tts` phát qua loa ngoài điện thoại làm fallback. |
 | **Đóng gói Model On-Device (~2GB)** | 🟢 **Resolved** | App chạy hoàn toàn offline trên điện thoại | Đã tích hợp ONNX Runtime Native C++ (`OnnxInferenceModule.kt`) và tối ưu On-Demand SmolVLM2 + PhoWhisper + YOLO26s + ZipDepth trực tiếp trong mã nguồn APK. |
 | **Người khiếm thị khó tự thao tác mở app** | ♿ **UX Lim.** | Người mù không thể tự tìm và bấm mở app | Đã bổ sung `BleAutoConnectService.ts` tự động quét/kết nối lại ngầm khi kính bật nguồn; hỗ trợ phản hồi rung haptic và giọng nói. |

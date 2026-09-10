@@ -50,7 +50,10 @@ jobs:
 
       - name: Regenerate config.json for Linux paths
         working-directory: mobile_app
-        run: npx react-native config > config.json
+        run: |
+          npx react-native config 2>/dev/null > config.json
+          # Validate the output is valid JSON (fail fast if npx printed warnings to stdout)
+          python3 -c "import json,sys; json.load(open('config.json'))" && echo "config.json is valid JSON" || (echo "ERROR: config.json is not valid JSON"; cat config.json; exit 1)
 
       - name: Set up Python (for model packaging)
         uses: actions/setup-python@v5

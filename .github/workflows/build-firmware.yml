@@ -1,0 +1,54 @@
+name: Build & Release Firmware
+
+on:
+  push:
+    tags:
+      - 'fw-v*'
+  workflow_dispatch:
+
+jobs:
+  build-firmware:
+    name: Build ESP32-S3 Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build Firmware
+        working-directory: firmware
+        run: pio run -e esp32s3cam
+
+      - name: Rename Firmware Binary
+        run: |
+          VERSION="${{ github.ref_name }}"
+          cp firmware/.pio/build/esp32s3cam/firmware.bin bsmart_firmware_${VERSION}.bin
+          echo "FIRMWARE_FILE=bsmart_firmware_${VERSION}.bin" >> $GITHUB_ENV
+
+      - name: Upload Firmware as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsmart-firmware
+          path: ${{ env.FIRMWARE_FILE }}
+          retention-days: 14
+
+      - name: Attach Firmware to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/fw-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.FIRMWARE_FILE }}
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

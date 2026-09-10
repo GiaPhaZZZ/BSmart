@@ -3,13 +3,13 @@ name: Build & Release Android APK
 on:
   push:
     tags:
-      - 'v*'
+      - 'app-v*'
   workflow_dispatch:
     inputs:
       build_type:
         description: 'Build Type (debug or release)'
         required: true
-        default: 'release'
+        default: 'debug'
         type: choice
         options:
           - release
@@ -75,12 +75,12 @@ jobs:
           retention-days: 14
 
       - name: Create GitHub Release and Attach APK
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/app-v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.find-apk.outputs.apk_path }}
           draft: false
-          prerelease: false
+          prerelease: true
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

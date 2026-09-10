@@ -19,9 +19,9 @@ import {
   startBackgroundService,
   stopBackgroundService,
 } from '../services/background/ForegroundService';
-import { transcribeAudio, askQA } from '../services/api/ApiService';
-import { transcribeAudioOnDevice } from '../services/ai/OnDeviceAsrService';
+import { transcribeSpeech } from '../services/ai/OnDeviceAsrService';
 import { askQAOnDevice } from '../services/ai/OnDeviceVlmService';
+import { combinePcmChunksToWav } from '../services/audio/audioUtils';
 import { speakViaBle, speakUrgent, stopSpeaking } from '../services/tts/TtsService';
 import {
   playFeatureActivationSound,
@@ -118,6 +118,7 @@ export function useAppStateMachine(): AppStateMachineResult {
   const isProcessingFrame = useRef(false);
   const navIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordedAudioRef = useRef<string | null>(null);
+  const audioChunksRef = useRef<string[]>([]);
   const capturedImageRef = useRef<string | null>(null);
 
   const addLog = useCallback(
@@ -235,6 +236,7 @@ export function useAppStateMachine(): AppStateMachineResult {
       transitionTo(AppState.LISTENING);
       recordedAudioRef.current = null;
       capturedImageRef.current = null;
+      audioChunksRef.current = [];
 
       // In real implementation: start audio capture from BLE
       try {
@@ -256,20 +258,25 @@ export function useAppStateMachine(): AppStateMachineResult {
     transitionTo(AppState.PROCESSING);
 
     try {
-      // In real implementation: recordedAudioRef.current = actual BLE audio
-      const audioData = recordedAudioRef.current ?? 'MOCK_AUDIO_BASE64';
+      // Reassemble all streamed PCM chunks from ESP32 into a valid 16kHz WAV file
+      const audioData =
+        audioChunksRef.current.length > 0
+          ? combinePcmChunksToWav(audioChunksRef.current)
+          : recordedAudioRef.current ?? 'MOCK_AUDIO_BASE64';
       const imageData = capturedImageRef.current ?? null;
 
       if (appStateRef.current === AppState.FEATURE_1_QA) {
-        // Feature 1: on-demand audio + image for QA (100% Offline, no server dependence)
-        addLog('Processing on-demand QA request (100% Offline)...');
-        addLog('Transcribing question using on-device PhoWhisper...');
-        const onDeviceAsr = await transcribeAudioOnDevice(audioData);
-        const question = onDeviceAsr.text || 'Trước mặt tôi có gì?';
+        // Feature 1: on-demand audio + image for QA
+        addLog(
+          `Processing QA: received ${audioChunksRef.current.length} audio chunk(s)...`,
+        );
+        addLog('Transcribing question using PhoWhisper ASR...');
+        const asrResult = await transcribeSpeech(audioData);
+        const question = asrResult.text || 'Trước mặt tôi có gì?';
         addLog(`Transcribed: "${question}"`);
 
         const qaImage = imageData ?? 'MOCK_IMAGE_BASE64';
-        addLog('Running on-device SmolVLM2-256M Visual QA (On-Demand)...');
+        addLog('Running SmolVLM2 Visual QA...');
         const onDeviceVlm = await askQAOnDevice(qaImage, question);
         const answer = onDeviceVlm.answer;
         addLog(`Answer: "${answer}"`);
@@ -277,10 +284,13 @@ export function useAppStateMachine(): AppStateMachineResult {
         await speakViaBle(answer, bleService.current);
         transitionTo(AppState.FEATURE_1_QA); // Stay in QA
       } else {
-        // Feature selection from IDLE→LISTENING (100% Offline)
-        addLog('Transcribing command using on-device PhoWhisper...');
-        const onDeviceAsr = await transcribeAudioOnDevice(audioData);
-        const text = onDeviceAsr.text;
+        // Feature selection from IDLE→LISTENING
+        addLog(
+          `Processing Command: received ${audioChunksRef.current.length} audio chunk(s)...`,
+        );
+        addLog('Transcribing command using PhoWhisper ASR...');
+        const asrResult = await transcribeSpeech(audioData);
+        const text = asrResult.text;
         addLog(`Transcribed: "${text}"`);
 
         const feature = matchFeatureKeyword(text);
@@ -388,6 +398,7 @@ export function useAppStateMachine(): AppStateMachineResult {
     });
 
     const unsubAudio = svc.onAudioReceived(audioBase64 => {
+      audioChunksRef.current.push(audioBase64);
       recordedAudioRef.current = audioBase64;
     });
 

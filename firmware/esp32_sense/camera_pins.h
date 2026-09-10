@@ -7,7 +7,7 @@
 // Choose hardware profile:
 // 1: CAMERA_MODEL_XIAO_ESP32S3 (Seeed Studio XIAO ESP32S3 Sense with onboard PDM mic)
 // 2: CAMERA_MODEL_ESP32S3_CAM_INMP441 (ESP32-S3 CAM with external I2S INMP441 mic)
-#define CAMERA_MODEL_XIAO_ESP32S3
+#define CAMERA_MODEL_ESP32S3_CAM_INMP441
 
 #if defined(CAMERA_MODEL_XIAO_ESP32S3)
   // Camera DVP pins for Seeed Studio XIAO ESP32S3 Sense

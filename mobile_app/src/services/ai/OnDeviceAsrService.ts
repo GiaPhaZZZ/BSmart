@@ -9,6 +9,7 @@
 
 import { AppState } from '../../types';
 import { modelRegistry } from './ModelRegistry';
+import { transcribeAudio } from '../api/ApiService';
 
 export interface AsrTranscriptionResult {
   text: string;
@@ -96,4 +97,36 @@ export async function transcribeAudioOnDevice(
     matchedState: matched,
     confidence: 0.95,
   };
+}
+
+/**
+ * Unified speech transcription:
+ * 1. Tries PhoWhisper server (/transcribe) for actual neural Vietnamese speech recognition.
+ * 2. Falls back to on-device ASR handler if server is unavailable/offline.
+ */
+export async function transcribeSpeech(
+  audioBase64: string,
+): Promise<AsrTranscriptionResult> {
+  if (!audioBase64 || audioBase64.length === 0) {
+    return { text: '', matchedState: null, confidence: 0 };
+  }
+
+  // 1. Try real PhoWhisper backend endpoint
+  try {
+    const apiResult = await transcribeAudio(audioBase64);
+    if (apiResult && apiResult.text && apiResult.text.trim().length > 0) {
+      const cleanText = apiResult.text.trim();
+      const matched = matchVoiceCommand(cleanText);
+      return {
+        text: cleanText,
+        matchedState: matched,
+        confidence: 0.98,
+      };
+    }
+  } catch (err) {
+    console.log('[ASR] Backend PhoWhisper not reachable, using offline ASR:', err);
+  }
+
+  // 2. Fallback to on-device handler
+  return transcribeAudioOnDevice(audioBase64);
 }

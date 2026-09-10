@@ -172,8 +172,32 @@ bool initCamera() {
     return false;
   }
 
+  // Camera orientation & flipping (lật ảnh nếu cảm biến bị ngược trên kính)
+  sensor_t *s = esp_camera_sensor_get();
+  if (s) {
+    s->set_vflip(s, 1);    // Lật ảnh dọc 180 độ (Vertical Flip)
+    s->set_hmirror(s, 0);  // Lật gương ngang (Horizontal Mirror)
+  }
+
   Serial.println("[Camera] OV2640/OV5640 initialized successfully.");
   return true;
+}
+
+/**
+ * Capture frame and send raw JPEG directly over Serial for live preview
+ */
+void captureAndSendSerialImage() {
+  Serial.println("\n[Camera] Capturing photo for Serial preview...");
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("[Camera] Capture failed!");
+    return;
+  }
+  Serial.printf("START_JPEG:%u\n", (unsigned int)fb->len);
+  Serial.write(fb->buf, fb->len);
+  Serial.println("\nEND_JPEG");
+  esp_camera_fb_return(fb);
+  Serial.println("[Camera] Photo sent to Serial successfully.");
 }
 
 /**
@@ -348,6 +372,9 @@ void sendButtonEvent(const char *eventCode) {
 }
 
 void handleButton() {
+  // Bỏ qua 2 giây đầu lúc mạch nạp khởi động tránh kích hoạt giả
+  if (millis() < 2000) return;
+
   int reading = digitalRead(BUTTON_RECORD_PIN);
 
   if (reading != lastButtonState) {
@@ -451,18 +478,41 @@ void setup() {
 
   pService->start();
 
-  // Start Advertising
+  // Start Advertising with separated Name and Service UUID to strictly fit within 31-byte BLE limit
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
+
+  // Enable BLE Security Bonding so Android/iOS Settings recognises it as a pairable accessory
+  BLESecurity *pSecurity = new BLESecurity();
+  pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
+  pSecurity->setCapability(ESP_IO_CAP_NONE);
+
+  BLEAdvertisementData advData;
+  advData.setName(BLE_DEVICE_NAME);
+  advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
+  advData.setAppearance(0x0440); // 0x0440: Generic Audio / Headset / Wearable
+  pAdvertising->setAdvertisementData(advData);
+
+  BLEAdvertisementData scanData;
+  scanData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  pAdvertising->setScanResponseData(scanData);
+
   pAdvertising->setScanResponse(true);
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
+  pAdvertising->start();
 
-  Serial.println("[BLE] Advertising started. Waiting for BSmart Mobile App...");
+  Serial.printf("[BLE] Advertising started as '%s' (Wearable Profile). Waiting for connection...\n", BLE_DEVICE_NAME);
 }
 
 void loop() {
+  // Listen for serial commands ('c' to capture photo preview)
+  if (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 'c' || cmd == 'C') {
+      captureAndSendSerialImage();
+    }
+  }
+
   // Handle physical button events
   handleButton();
 

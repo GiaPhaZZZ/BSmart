@@ -113,77 +113,86 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
 
 ---
 
-## 4. Điều khiển qua giọng nói (Bắt buộc — tính năng nền tảng)
+## 4. Điều khiển qua giọng nói & Nút bấm vật lý (Tính năng nền tảng)
 
-**Cơ chế ghi âm:** Push-to-talk — giữ nút Ghi âm khi nói, thả ra là kết thúc ghi âm (áp dụng cho mọi bước ghi âm trong toàn bộ app, kể cả tính năng 1).
+**Cơ chế nút bấm trên kính (ESP32-S3 Sense):** Kính trang bị 2 nút vật lý:
+1. **Nút Nguồn (Power):** Bật/tắt nguồn thiết bị.
+2. **Nút Ghi âm / Đa năng (Record Button - Chân GPIO với Debounce 30ms):**
+   - **Nhấn giữ (HOLD > 300ms) — Push-to-talk (PTT):** Kính gửi mã BLE `01` (`BUTTON_HOLD`), kích hoạt mic I2S (INMP441) thu âm 16kHz 16-bit Mono thành các chunk (120 byte PCM → 160 ký tự Base64) stream qua BLE. App chuyển sang `LISTENING`, phát âm báo "Chờ nhận lệnh".
+   - **Thả tay (RELEASE):** Kính gửi mã BLE `00` (`BUTTON_RELEASE`), dừng thu mic. Đồng thời camera OV2640 lập tức chụp 1 ảnh JPEG (320×240 QVGA) gửi kèm sang App. App chuyển sang `PROCESSING`, ghép các chunk PCM thành file WAV 16kHz hoàn chỉnh để đưa qua PhoWhisper.
+   - **Nhấn nhanh (SHORT-PRESS ≤ 300ms) — Hủy khẩn cấp / Về Trang chủ:** Kính gửi mã BLE `02` (`BUTTON_SHORT_PRESS`). Có quyền ưu tiên cao nhất, lập tức ngắt phát âm thanh, dừng vòng lặp dẫn đường, App phát TTS "Đã về trang chủ" và đưa hệ thống về `IDLE`.
 
-**Luồng:**
-
-1. User giữ nút Ghi âm trên kính → tín hiệu gửi qua app → app chuyển sang `LISTENING` → phát audio "Chờ nhận lệnh" qua loa kính.
+**Luồng nhận diện lệnh bằng giọng nói (Voice-First):**
+1. User nhấn giữ nút Ghi âm → App vào `LISTENING` → phát audio "Chờ nhận lệnh".
 2. User nói yêu cầu trong lúc giữ nút, thả nút ra là kết thúc ghi âm.
-3. Audio gửi tới app qua Bluetooth → app xử lý qua model transcribe on-device (PhoWhisper) → ra text.
-4. App nhận diện keyword trong text (mọi lựa chọn tính năng đều qua voice, không qua nút). Hỗ trợ normalization/fuzzy matching đơn giản:
+3. Audio stream gửi tới App qua BLE → App xử lý qua model transcribe on-device (PhoWhisper-tiny INT8) → ra text tiếng Việt.
+4. App nhận diện keyword trong text (`matchFeatureKeyword`). Hỗ trợ chuẩn hóa bỏ dấu và đối sánh mờ:
 
-   | Nói | Vào tính năng |
-   | --- | --- |
-   | "tính năng 1", "tính năng một", "GPT" | `FEATURE_1_QA` |
-   | "tính năng 2", "tính năng hai" | `FEATURE_2_CAPTURE` |
-   | "tính năng 3", "tính năng ba" | `FEATURE_3_NAVIGATION` |
+   | Lời nói nhận diện | Mã tính năng | Âm thanh kích hoạt (Sound) | Lệnh BLE (App → Kính) | TTS Fallback xác nhận |
+   | :--- | :---: | :---: | :---: | :--- |
+   | "tính năng 1", "tính năng một", "hỏi đáp", "gpt", "miêu tả" | `FEATURE_1_QA` | `Open_f1.mp3` | `CMD:PLAY_F1` | "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng" |
+   | "tính năng 2", "tính năng hai", "chụp ảnh" | `FEATURE_2_CAPTURE` | `Open_f4.mp3` | `CMD:PLAY_F4` | "Đã vào tính năng 2, chụp ảnh" |
+   | "tính năng 3", "tính năng ba", "dẫn đường", "tự động", "đi bộ" | `FEATURE_3_NAVIGATION` | `Open_f2.mp3` | `CMD:PLAY_F2` | "Đã vào tính năng 3, chế độ dẫn đường" |
 
    - Không khớp keyword nào → phát lại "Không nhận diện được lệnh, vui lòng thử lại" và quay về `IDLE`.
 
-5. Khi vào tính năng, app luôn phát audio xác nhận nêu rõ tên tính năng vừa vào, ví dụ:
-   - "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng"
-   - "Đã vào tính năng 2, chụp ảnh"
-   - "Đã vào tính năng 3, chế độ dẫn đường"
-
-**Thoát về trang chủ:** nhấn nhanh (short press, không giữ) nút Ghi âm bất kỳ lúc nào → thoát tính năng hiện tại, quay về `IDLE`, phát "Đã về trang chủ". (Nút Ghi âm dùng 2 kiểu thao tác: **giữ** = ra lệnh giọng nói; **nhấn nhanh** = về trang chủ.)
-
-> Short press có priority cao hơn recording/navigation và phải cancel operation hiện tại nếu có thể.
-
-**Nút Power:** short press → bật/tắt thiết bị. App không dùng Power để điều khiển feature. Nếu firmware thực tế có behavior khác thì firmware được ưu tiên.
-
 ---
 
-## 5. Tính năng 1: Hỏi đáp
+## 5. Tính năng 1: Hỏi đáp (Visual Question Answering)
 
-1. Vào: đã ở `FEATURE_1_QA`, đã phát audio xác nhận "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng".
-2. User giữ nút Ghi âm và nói câu hỏi (push-to-talk) → kính gửi audio + 1 ảnh chụp cùng lúc tới app qua Bluetooth.
-3. App xử lý audio qua model transcribe on-device (PhoWhisper) → ra text câu hỏi.
-4. App đưa ảnh + text câu hỏi vào model SmolVLM2 on-device → nhận về text mô tả/trả lời.
-5. App chuyển text trả lời sang giọng nói (TTS) → truyền audio về kính → phát ở loa kính.
-6. Sau khi trả lời xong, quay về trạng thái chờ trong tính năng 1 (user có thể giữ nút hỏi tiếp) hoặc quay `IDLE` nếu nhấn nhanh nút Ghi âm.
+1. **Vào tính năng:** Đang ở `FEATURE_1_QA`, đã phát âm thanh kích hoạt `Open_f1.mp3` (bắn lệnh BLE `CMD:PLAY_F1` sang kính, TTS fallback: "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng").
+2. **Hỏi đáp tương tác:** User nhấn giữ nút Ghi âm và nói câu hỏi (Push-to-talk) → kính stream audio mic I2S. Khi thả tay, kính chụp ngay 1 ảnh quang cảnh JPEG (320×240 QVGA) và gửi cả hai qua BLE về App.
+3. **Chuyển giọng nói thành văn bản (STT):** App xử lý audio qua model PhoWhisper-tiny on-device (CTranslate2 INT8) → nhận về text câu hỏi tiếng Việt.
+4. **Pipeline Xử lý Hỏi đáp Đa phương thức (AI Core):**
+   - **Bước 1 (Dịch xuôi):** Model **EnViT5** (`VietAI/envit5-translation` CT2 INT8) dịch text câu hỏi Tiếng Việt → Tiếng Anh.
+   - **Bước 2 (Visual QA):** Model **SmolVLM2** (`SmolVLM2-256M-Video-Instruct` on-device) tiếp nhận đồng thời [Ảnh từ kính + Câu hỏi Tiếng Anh], phân tích bối cảnh hình ảnh và sinh ra câu trả lời ngắn gọn (~1 câu súc tích) bằng Tiếng Anh.
+   - **Bước 3 (Dịch ngược):** Model **EnViT5** dịch câu trả lời Tiếng Anh → Tiếng Việt hoàn chỉnh.
+5. **Tổng hợp giọng nói (TTS):** App chuyển text trả lời tiếng Việt sang giọng nói qua `react-native-tts` (trên Mobile) hoặc `Piper TTS` (trên Python Server) → truyền dữ liệu audio về kính qua BLE Characteristic `AUDIO_OUT` để phát ở loa kính (chế độ MVP fallback phát qua loa ngoài điện thoại).
+6. **Sau khi trả lời xong:** Hệ thống giữ nguyên trạng thái chờ trong `FEATURE_1_QA` để user có thể tiếp tục nhấn giữ hỏi câu tiếp theo, hoặc nhấn nhanh nút Ghi âm (≤ 300ms) để thoát về `IDLE`.
 
 **Ví dụ:**
-- Input: ảnh + audio "Trước mặt tôi là gì"
-- Output (giọng nói): "Trước mặt bạn là khung cảnh thành phố về đêm với đường xe chạy"
+- Input: Ảnh phía trước + audio "Trước mặt tôi là gì"
+- Pipeline: PhoWhisper ("Trước mặt tôi là gì") → EnViT5 ("What is in front of me?") → SmolVLM2 ("A street with parked cars and a pedestrian crossing.") → EnViT5 ("Một con phố với ô tô đang đỗ và lối qua đường cho người đi bộ.")
+- Output (giọng nói): "Một con phố với ô tô đang đỗ và lối qua đường cho người đi bộ."
 
 ---
 
-## 6. Tính năng 2: Chụp ảnh
+## 6. Tính năng 2: Chụp ảnh (Photo Capture & Storage)
 
-1. User nói "tính năng 2" → vào `FEATURE_2_CAPTURE`, app phát audio xác nhận "Đã vào tính năng 2, chụp ảnh" → kính chụp ảnh → gửi ảnh tới app qua Bluetooth.
-2. App lưu ảnh vào bộ nhớ điện thoại (local storage / thư viện ảnh).
-3. App tự động quay về `IDLE`, TTS hóa và phát qua loa kính: "Đã hoàn thành, bạn muốn chọn tính năng nào tiếp theo".
+1. **Kích hoạt:** User nói "tính năng 2" hoặc "chụp ảnh" từ `IDLE` → chuyển sang `FEATURE_2_CAPTURE`.
+2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f4.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F4`** sang kính; TTS fallback: "Đã vào tính năng 2, chụp ảnh").
+3. **Chụp & Truyền ảnh:**
+   - App gửi lệnh điều khiển BLE **`CAPTURE`** qua Characteristic `AUDIO_OUT` sang kính.
+   - Vi điều khiển ESP32-S3 điều khiển camera OV2640 chụp 1 khung ảnh JPEG (320×240 QVGA), cắt thành các packet Base64 (120 bytes binary → 160 Base64 chars) stream qua Characteristic `IMAGE` về App.
+4. **Lưu trữ ảnh cục bộ:**
+   - App thu thập đầy đủ các packet, ghép thành file ảnh JPEG nguyên vẹn.
+   - Lưu trữ trực tiếp file ảnh vào thư mục máy (`Pictures/BSmart_...jpg` thông qua dịch vụ `ImageStorageService.ts`).
+5. **Phản hồi hoàn tất:**
+   - App tự động chuyển về `IDLE`, phát âm thanh TTS qua loa: "Đã hoàn thành, bạn muốn chọn tính năng nào tiếp theo".
 
 ---
 
-## 7. Tính năng 3: Dẫn đường (Auto-pilot) — Tính năng trọng tâm (USP)
+## 7. Tính năng 3: Dẫn đường (Auto-pilot Obstacle & Depth Awareness)
 
-> **Lưu ý phạm vi:** Đây **không phải** navigation thật sự (không GPS, không map, không route planning). Trong MVP, tính năng này là **real-time obstacle awareness**: nhận diện vật thể và cảnh báo vị trí/khoảng cách.
+> **Lưu ý phạm vi:** Đây **không phải** dẫn đường GPS bản đồ (không GPS, không map turn-by-turn). Trong MVP, tính năng này là **nhận thức và cảnh báo vật cản theo thời gian thực (Real-time Obstacle & Depth Awareness)**.
 
-1. Vào chế độ qua voice ("tính năng 3") → `FEATURE_3_NAVIGATION`, app phát audio xác nhận "Đã vào tính năng 3, chế độ dẫn đường".
-2. Cứ mỗi 4 giây, kính tự động chụp ảnh và gửi tới app qua Bluetooth.
-   - Chu kỳ 4 giây tính từ lúc bắt đầu capture frame tiếp theo. Không tạo queue ảnh.
-   - Chỉ xử lý **một frame tại một thời điểm** (không xử lý song song). Nếu frame trước chưa xong thì bỏ frame tiếp theo.
-3. Ảnh được đưa vào 2 model chạy on-device trên điện thoại (không gọi cloud, để đảm bảo tốc độ phản hồi thời gian thực):
-   - **YOLO26s** — nhận diện vật thể/người trong khung hình (class + vị trí bounding box).
-   - **ZipDepth** — ước lượng độ sâu (khoảng cách tương đối) cho từng vùng ảnh, kết hợp với bounding box của YOLO để biết vật thể đó gần hay xa.
-4. Kết quả 2 model được kết hợp thành text cảnh báo/chỉ dẫn (xem logic ở mục 7.1), sau đó chuyển thành giọng nói (TTS), truyền về kính và phát ở loa kính ngay khi có.
-5. **Thoát chế độ:** nhấn nhanh nút Ghi âm → dừng vòng lặp chụp ảnh, quay về `IDLE`, phát "Đã thoát chế độ dẫn đường".
-6. Nếu không có cảnh báo đặc biệt, **không phát audio** (tránh làm phiền).
+1. **Kích hoạt:** User nói "tính năng 3" hoặc "dẫn đường" từ `IDLE` → chuyển sang `FEATURE_3_NAVIGATION`.
+2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f2.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F2`** sang kính; TTS fallback: "Đã vào tính năng 3, chế độ dẫn đường").
+3. **Vòng lặp tự động (Auto-pilot Loop):**
+   - App gửi lệnh điều khiển BLE **`NAV_START`** sang kính.
+   - Kính kích hoạt timer định kỳ tự động chụp và gửi 1 frame JPEG mỗi **4 giây** (`NAVIGATION_FRAME_INTERVAL_MS = 4000`).
+   - **Cơ chế Zero-Queue:** Chỉ xử lý 1 frame tại một thời điểm (`isNavigatingFrame`). Nếu frame trước đang inference chưa xong, frame mới gửi tới sẽ bị **drop ngay lập tức** để tránh trễ tích lũy.
+4. **Xử lý AI On-Device (Không gọi Cloud):**
+   - **YOLO26s:** Nhận diện vật cản/người trong khung hình (`person`, `car`, `motorcycle`, `bicycle`, `truck`, `bus`, `stairs`, `chair/table`), xác định bounding box và độ tin cậy (ngưỡng threshold ≥ 0.5).
+   - **ZipDepth:** Ước lượng bản đồ độ sâu tương đối (Relative Depth) bên trong bounding box của từng vật thể, phân loại khoảng cách **GẦN** hay **XA**.
+5. **Tổng hợp cảnh báo & Phát âm thanh:**
+   - Ghép kết quả theo luật rule-based (xem mục 7.1) thành câu cảnh báo súc tích: *"Lưu ý, có [vật thể] ở [vị trí], [gần/xa]"*.
+   - **Cơ chế chống lặp (Cooldown 8 giây):** Cùng 1 vật thể ở cùng vị trí/khoảng cách sẽ không nhắc lại trong 8 giây để tránh làm phiền người dùng. Nếu đường phía trước thông thoáng an toàn thì **giữ im lặng hoàn toàn**.
+   - Chuyển text cảnh báo thành giọng nói (TTS) và phát ngay lập tức (ngắt lời thoại cũ nếu có cảnh báo khẩn cấp mới).
+6. **Thoát chế độ:** 
+   - User nhấn nhanh nút Ghi âm (≤ 300ms) trên kính bất kỳ lúc nào → Kính gửi mã BLE `02` (`BUTTON_SHORT_PRESS`), App gửi lệnh BLE **`NAV_STOP`** dừng timer chụp ảnh trên kính, phát TTS "Đã thoát chế độ dẫn đường" và trở về `IDLE`.
 
-**Latency target:** < 2 giây từ lúc nhận frame đến khi bắt đầu phát cảnh báo, nếu hardware đáp ứng.
+**Latency target:** < 2 giây từ lúc nhận frame đến khi bắt đầu phát cảnh báo âm thanh.
 
 *Bổ sung: Giao tiếp giữa ESP32-S3 Sense và Android*
 
@@ -230,14 +239,22 @@ Không cần model NLP/LLM để sinh câu — rule-based/template là đủ cho
 
 ## 8. UI (điện thoại)
 
-- Tông màu tối, theme robot/high-tech / sci-fi HUD (sử dụng các mã màu `#0d1117`, `#00e5ff`, `#161b22`, v.v.).
-- Vì thao tác chính là bằng giọng nói và nút bấm trên kính, UI trên điện thoại phục vụ giám sát, debug và kiểm thử:
-  - **`StatusDisplay`**: Hiển thị trạng thái máy hiện tại (`IDLE`, `LISTENING`, `PROCESSING`, `FEATURE_1_QA`, `FEATURE_2_CAPTURE`, `FEATURE_3_NAVIGATION`) cùng text thông báo âm thanh mới nhất.
-  - **`ConnectionIndicator`**: Hiển thị trạng thái kết nối Bluetooth (`Connected`, `Disconnected`, `Connecting`), kèm nút Reconnect thủ công.
-  - **`DebugLog`**: Khung log dạng cuộn, hiển thị timeline các câu hỏi, phản hồi AI, cảnh báo vật cản và sự kiện hệ thống theo thời gian thực.
-  - **`MockControls`**: Bảng điều khiển giả lập dành cho dev và demo khi không có kính vật lý:
-    - Nút giả lập thao tác: Giữ nút Ghi âm (Hold Record), Thả nút (Release Record), Nhấn nhanh (Short Press - Thoát về Home).
-    - Nút giả lập tính năng: Trigger Photo Capture, Trigger Nav Frame, Toggle chế độ Mock/Real BLE.
+- Tông màu tối, độ tương phản cao, tối ưu hóa toàn diện cho người khiếm thị (TalkBack) đồng thời hỗ trợ chế độ kiểm thử cho lập trình viên.
+- **Chế độ Mặc định: Giao diện Khiếm thị (Blind-First UX)**:
+  - **`BlindTouchArea` (Màn hình tiếp xúc rộng)**: Chiếm trọn diện tích tương tác trung tâm, hỗ trợ các cử chỉ:
+    - *Chạm & Giữ (> 250ms)*: Bắt đầu thu âm giọng nói (Push-To-Talk) $\to$ Rung phản hồi haptic (50ms) + Phát tiếng Bíp xác nhận.
+    - *Thả tay*: Kết thúc thu âm và gửi lệnh $\to$ Rung phản hồi haptic (30ms) + Phát tiếng Cạch kết thúc.
+    - *Chạm nhanh (< 250ms) hoặc Chạm 2 ngón tay*: Hủy lệnh khẩn cấp, dừng mọi tác vụ và lập tức trở về `IDLE` $\to$ Rung phản hồi kép.
+  - **Hỗ trợ Google TalkBack toàn diện**: Toàn bộ các thành phần hiển thị đều được gắn `accessible={true}`, `accessibilityRole`, `accessibilityLabel` và `accessibilityHint` chi tiết; hệ thống tự động phát âm báo trạng thái qua `AccessibilityInfo.announceForAccessibility`.
+  - **`ConnectionIndicator`**: Hiển thị trạng thái Bluetooth trực quan với kích thước chữ lớn, tương phản cao, nhãn TalkBack hướng dẫn chạm 2 lần để kết nối hoặc ngắt kết nối.
+  - **`StatusDisplay`**: Biểu ngữ hiển thị trạng thái máy hiện tại (`IDLE`, `LISTENING`, `PROCESSING`, `FEATURE_1_QA`, `FEATURE_2_CAPTURE`, `FEATURE_3_NAVIGATION`).
+- **Chế độ Lập trình viên (Dev HUD) & Cài đặt**:
+  - Truy cập thông qua nút Cài đặt ⚙️ trên thanh tiêu đề (`SettingsModal`).
+  - Khi kích hoạt, màn hình mở rộng hiển thị thêm:
+    - **`MockControls`**: Bộ nút bấm giả lập các sự kiện phần cứng (Hold, Release, Short-press, Image Capture, Nav Frame) khi chạy trên Android Emulator.
+    - **`DebugLog`**: Khung cuộn hiển thị timeline chi tiết các log hệ thống, kết quả inference AI và dữ liệu gói tin BLE theo thời gian thực.
+    - **Công tắc BLE**: Cho phép chuyển đổi nhanh chóng giữa **Real BLE** (quét kính thật) và **Mock BLE** (giả lập offline).
+    - **Công tắc Dịch vụ ngầm**: Bật/tắt Android Foreground Service.
 
 ---
 
@@ -255,7 +272,7 @@ Không cần model NLP/LLM để sinh câu — rule-based/template là đủ cho
 
 **Hỗ trợ nhiều kính:** Không. MVP chỉ hỗ trợ **một kính tại một thời điểm**.
 
-**App background behavior:** Có thể chạy background trong phạm vi cần thiết cho demo, nhưng không yêu cầu đảm bảo hoạt động khi Android kill process.
+**App background behavior:** Đã tích hợp **Android Foreground Service (`BSmartForegroundService`)** kèm `PARTIAL_WAKE_LOCK` và thông báo thường trực trên thanh trạng thái (*"BSmart - Kính AI đang hoạt động ngầm"*). Đảm bảo ứng dụng duy trì kết nối BLE và các tiến trình AI hoạt động ổn định liên tục, ngăn chặn triệt để nguy cơ bị hệ điều hành ngắt khi tắt màn hình hoặc kích hoạt chế độ tiết kiệm pin (Doze Mode / App Standby) khi người dùng đút điện thoại vào túi quần.
 
 ---
 
@@ -307,15 +324,22 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **APP-08** | **Mobile App** | Lưu ảnh chụp tính năng 2 vào bộ nhớ máy | Tích hợp `ImageStorageService.ts` quản lý và lưu file ảnh chụp JPEG local kèm timestamp | ✅ **Hoàn thành** |
 | **APP-09** | **Mobile App** | Tích hợp BLE thực tế (`BlePlxService.ts`) | Xây dựng engine `BlePlxService.ts` tích hợp `react-native-ble-plx`, ghép gói GATT chunk JPEG/Audio và giải mã sự kiện nút bấm (16/16 tests pass) | ✅ **Hoàn thành** |
 | **APP-10** | **Mobile App** | Auto-connect BLE & Background Service | Xây dựng `BleAutoConnectService.ts` tự động quét/kết nối lại ngầm, phản hồi rung haptic và giọng nói cho người khiếm thị (21/21 tests pass) | ✅ **Hoàn thành** |
+| **APP-11** | **Mobile App** | Giao diện Khiếm thị Trợ năng (`BlindTouchArea.tsx`) | Thiết kế mặc định Blind-First UX, màn hình tiếp xúc rộng, nhận diện chạm 2 ngón tay, gắn đầy đủ nhãn TalkBack Android, modal Cài đặt Dev HUD | ✅ **Hoàn thành** |
+| **APP-12** | **Mobile App** | Phản hồi Âm thanh Bíp/Cạch & Rung Haptic | Tích hợp Android `ToneGenerator` zero-latency (`AudioPlayerModule.kt`) và rung `Vibration` khi nhấn giữ (Hold), thả nút (Release) và hủy lệnh | ✅ **Hoàn thành** |
+| **APP-13** | **Mobile App** | Android Foreground Service & Quyền BLE Runtime | Cấu hình `BSmartForegroundService` kèm `PARTIAL_WAKE_LOCK`, khai báo quyền Android 12+ BLE và tự động xin quyền runtime (`BlePermissionService.ts`) | ✅ **Hoàn thành** |
+| **APP-14** | **Mobile App** | Luồng điều khiển vận hành Kính (App $\to$ ESP32) | Gửi các lệnh `NAV_START` (chu kỳ 4s), `NAV_STOP` (dừng chụp), `CAPTURE` (chụp ảnh đơn) qua `AUDIO_OUT_CHAR_UUID` điều khiển camera kính | ✅ **Hoàn thành** |
+| **APP-15** | **Mobile App** | Tích lũy Audio Chunk & Tích hợp PhoWhisper | Nối chuỗi PCM Base64 chunks từ ESP32 BLE thành WAV 16kHz chuẩn (`audioUtils.ts`), tích hợp PhoWhisper nhận diện giọng nói tiếng Việt thực tế | ✅ **Hoàn thành** |
+| **APP-16** | **Mobile App** | Dịch vụ Âm thanh Kích hoạt & Lệnh Trigger BLE | Tích hợp `SoundEffectService.ts` phát file âm thanh `Open_f1.mp3`, `Open_f4.mp3`, `Open_f2.mp3` qua `AudioPlayerModule` và gửi lệnh BLE `CMD:PLAY_F1`, `CMD:PLAY_F4`, `CMD:PLAY_F2` (đã pass test) | ✅ **Hoàn thành** |
 | **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_phowhisper_onnx.py`, tích hợp `OnDeviceAsrService.ts` nhận diện giọng nói 100% offline | ✅ **Hoàn thành** |
 | **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Xây dựng `ai_core/export_smolvlm2_onnx.py`, tích hợp `SmolVLM2-256M` on-device với gói tối ưu hóa (On-demand, 256x256, max 35 tokens, INT8, async non-blocking, tensor recycling) trong `OnDeviceVlmService.ts` & `OnnxInferenceModule.kt` | ✅ **Hoàn thành** |
 | **MOD-03** | **AI On-Device** | Export YOLO26s + ZipDepth sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_yolo_zipdepth_onnx.py`, trích xuất mô hình phát hiện vật cản và ước lượng độ sâu làn đường | ✅ **Hoàn thành** |
 | **MOD-04** | **AI On-Device** | Đóng gói bộ Model Weights vào Android APK (~2GB) | Xây dựng `ai_core/package_models.py`, tích hợp C++ Native ONNX Runtime (`OnnxInferenceModule.kt`), build thành công APK Android (`BUILD SUCCESSFUL`) | ✅ **Hoàn thành** |
+| **MOD-05** | **AI On-Device** | Tích hợp Mô hình Dịch thuật Song ngữ EnViT5 | Lượng tử hóa `VietAI/envit5-translation` (CT2 INT8 / ONNX) làm cầu nối ngữ nghĩa 2 chiều Việt $\leftrightarrow$ Anh phục vụ chu trình VLM SmolVLM2 | ✅ **Hoàn thành** |
 | **FW-01** | **Firmware** | Source code C/C++ cho ESP32-S3 Sense (Arduino IDE/ESP-IDF) | Mã nguồn nạp vi điều khiển, quản lý I/O và cấu hình BLE Server (`firmware/esp32_sense/bsmart_esp32_sense.ino`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-02** | **Firmware** | Điều khiển Camera (OV2640/OV5640) nén JPEG | Chụp ảnh độ phân giải 320x240 / 640x480, nén dung lượng ≤ 50–100 KB, phân mảnh gói BLE (`seq:total:payload`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-03** | **Firmware** | Ghi âm mic I2S (INMP441 / PDM Onboard) | Thu âm 16kHz, mono, 16-bit khi người dùng giữ nút Ghi âm và stream Base64 qua BLE | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-04** | **Firmware** | Xử lý sự kiện nút bấm vật lý (Nút Ghi âm & Nguồn) | Phân biệt Hold (bắt đầu nói), Release (kết thúc), Short-press (<300ms, thoát về Home) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
-| **FW-05** | **Firmware** | Triển khai GATT Server & BLE Chunking Protocol | Chia nhỏ gói tin truyền ảnh/audio qua BLE, tối ưu MTU để tránh nghẽn băng thông | ✅ **Đã code C++** *(Chờ nạp mạch)* |
+| **FW-05** | **Firmware** | GATT Server & Bộ nhận lệnh điều khiển (App $\to$ Kính) | Phân mảnh BLE, xử lý các lệnh: `NAV_START`, `NAV_STOP`, `CAPTURE`, `CMD:PLAY_F1`, `CMD:PLAY_F2`, `CMD:PLAY_F4` | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-06** | **Firmware** | Phát âm thanh ra loa gọng kính (BLE Audio Pipe) | Nhận stream âm thanh từ điện thoại qua BLE và phát ra I2S DAC/Loa kính | ⚠️ **Chờ Protocol** |
 | **HW-01** | **Hardware/IoT** | Nạp vi điều khiển & kiểm thử phần cứng vật lý | Nạp code qua Arduino IDE (bật OPI PSRAM), kiểm tra Serial Monitor 115200, test Camera OV2640 & PDM mic | ⏳ **Sắp làm** *(Cần board vật lý)* |
 | **INT-01** | **Tích hợp** | Kiểm thử liên thông BLE thực tế Kính ↔ Điện thoại | Đo đạc trễ truyền nhận ảnh JPEG 320x240, audio WAV 16kHz, tỷ lệ rớt gói và tối ưu kích thước chunk/MTU | ⏳ **Sắp làm** *(Sau khi có board)* |
@@ -331,7 +355,11 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | Vấn đề / Giới hạn | Phân loại | Tác động thực tế | Giải pháp hiện tại & Khuyến nghị |
 | :--- | :---: | :--- | --- |
 | **Chưa có Firmware ESP32 & UUIDs** | 🟢 **Resolved** | Mobile app đã có thể kết nối với kính thật | Đã triển khai đầy đủ mã nguồn C++ tại `firmware/esp32_sense/bsmart_esp32_sense.ino` đồng bộ 100% UUIDs và giao thức phân mảnh với `BlePlxService.ts`. |
-| **Chưa có giao thức BLE Audio Pipe** | ⚠️ **Blocker** | Kính chưa tự phát được âm thanh ra loa | Mobile app tạm thời dùng `react-native-tts` phát qua loa ngoài điện thoại làm fallback. |
+| **Giao diện & Trợ năng cho Người khiếm thị** | 🟢 **Resolved** | Người khiếm thị dễ dàng thao tác trên điện thoại | Đã bổ sung `BlindTouchArea` màn hình tiếp xúc rộng, nhận diện chạm giữ nói / chạm 2 ngón hủy, âm bíp ToneGenerator, rung haptic và TalkBack toàn diện. |
+| **Nguy cơ bị Doze Mode tắt khi tắt màn hình** | 🟢 **Resolved** | Ứng dụng chạy liên tục khi đút túi quần | Đã tích hợp Android Foreground Service (`BSmartForegroundService`) kèm `PARTIAL_WAKE_LOCK` và thông báo thường trực. |
+| **Luồng điều khiển vận hành Kính (App $\to$ ESP32)** | 🟢 **Resolved** | Kính tự động chụp định kỳ 4s khi dẫn đường | Đã gửi lệnh `NAV_START`, `NAV_STOP`, `CAPTURE` qua Bluetooth điều khiển camera kính theo đúng trạng thái của App. |
+| **Nút Bluetooth chưa kết nối thực tế** | 🟢 **Resolved** | Quét và kết nối Bluetooth Low Energy thực tế | Đã cấu hình Real BLE làm mặc định, tự động xin quyền runtime `BLUETOOTH_SCAN/CONNECT` và khai báo trong Manifest. |
+| **Chưa có giao thức BLE Audio Pipe** | ⚠️ **Blocker** | Kính chưa tự phát được âm thanh ra loa | Phần cứng kính hiện tại chưa có module I2S DAC/Loa ngoài; Mobile app dùng `react-native-tts` phát qua loa ngoài điện thoại làm fallback. |
 | **Đóng gói Model On-Device (~2GB)** | 🟢 **Resolved** | App chạy hoàn toàn offline trên điện thoại | Đã tích hợp ONNX Runtime Native C++ (`OnnxInferenceModule.kt`) và tối ưu On-Demand SmolVLM2 + PhoWhisper + YOLO26s + ZipDepth trực tiếp trong mã nguồn APK. |
 | **Người khiếm thị khó tự thao tác mở app** | ♿ **UX Lim.** | Người mù không thể tự tìm và bấm mở app | Đã bổ sung `BleAutoConnectService.ts` tự động quét/kết nối lại ngầm khi kính bật nguồn; hỗ trợ phản hồi rung haptic và giọng nói. |
 | **Chưa tích hợp bản đồ định vị GPS** | ♿ **UX Lim.** | Chỉ cảnh báo vật thể trước mắt, không chỉ đường | Nêu rõ trong phạm vi: Tính năng 3 là **Obstacle Awareness (Tránh vật cản)**, không phải GPS Turn-by-turn. |

@@ -45,7 +45,12 @@ export function ConnectionIndicator({
   const isConnecting = state === BleConnectionState.CONNECTING;
 
   return (
-    <View style={[styles.container, { borderColor: cfg.color + '40' }]}>
+    <View
+      style={[styles.container, { borderColor: cfg.color + '40' }]}
+      accessible={true}
+      accessibilityRole="summary"
+      accessibilityLabel={`Trạng thái Bluetooth: ${cfg.label}`}
+    >
       <View style={styles.left}>
         <View style={[styles.dot, { backgroundColor: cfg.dotColor }]} />
         <View>
@@ -55,14 +60,33 @@ export function ConnectionIndicator({
           </Text>
         </View>
       </View>
-      {!isConnecting && (
+      {isConnecting ? (
+        <View
+          accessible={true}
+          accessibilityRole="alert"
+          accessibilityLabel="Đang tìm và kết nối kính"
+        >
+          <Text style={styles.connectingText}>Đang quét...</Text>
+        </View>
+      ) : (
         <TouchableOpacity
           style={[
             styles.button,
             isConnected ? styles.buttonDisconnect : styles.buttonConnect,
           ]}
           onPress={isConnected ? onDisconnect : onConnect}
-          accessibilityLabel={isConnected ? 'Disconnect BLE' : 'Connect BLE'}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={
+            isConnected
+              ? 'Ngắt kết nối Bluetooth'
+              : 'Kết nối kính Bluetooth'
+          }
+          accessibilityHint={
+            isConnected
+              ? 'Nhấn hai lần để ngắt kết nối với kính'
+              : 'Nhấn hai lần để bắt đầu quét và kết nối với kính AI'
+          }
         >
           <Text style={styles.buttonText}>
             {isConnected ? 'Ngắt' : 'Kết nối'}
@@ -122,5 +146,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '600',
+  },
+  connectingText: {
+    color: '#FFB300',
+    fontSize: 13,
+    fontWeight: '600',
+    fontStyle: 'italic',
   },
 });

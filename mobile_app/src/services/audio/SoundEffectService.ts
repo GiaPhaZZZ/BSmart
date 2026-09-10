@@ -13,7 +13,7 @@
  *   - Falls back to TTS if native sound player is unavailable.
  */
 
-import { NativeModules } from 'react-native';
+import { NativeModules, Vibration } from 'react-native';
 import { IBleService, BleConnectionState } from '../../types';
 import { speakViaBle, stopSpeaking } from '../tts/TtsService';
 
@@ -95,5 +95,65 @@ export function stopFeatureSound(): void {
     }
   } catch (e) {
     // Ignore error
+  }
+}
+
+/**
+ * Play walkie-talkie start beep and trigger haptic vibration when user holds button to speak.
+ */
+export function playPttStartFeedback(haptic = true): void {
+  if (haptic) {
+    try {
+      Vibration.vibrate(50);
+    } catch {
+      // Ignore vibration error on unsupported platforms
+    }
+  }
+  try {
+    if (AudioPlayerModule?.playBeep) {
+      AudioPlayerModule.playBeep('start').catch(() => {});
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Play walkie-talkie release click and trigger haptic vibration when user releases button.
+ */
+export function playPttEndFeedback(haptic = true): void {
+  if (haptic) {
+    try {
+      Vibration.vibrate(30);
+    } catch {
+      // Ignore
+    }
+  }
+  try {
+    if (AudioPlayerModule?.playBeep) {
+      AudioPlayerModule.playBeep('stop').catch(() => {});
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Play emergency cancel feedback (double haptic + cancel tone).
+ */
+export function playCancelFeedback(haptic = true): void {
+  if (haptic) {
+    try {
+      Vibration.vibrate([0, 40, 50, 40]);
+    } catch {
+      // Ignore
+    }
+  }
+  try {
+    if (AudioPlayerModule?.playBeep) {
+      AudioPlayerModule.playBeep('cancel').catch(() => {});
+    }
+  } catch {
+    // Ignore
   }
 }

@@ -111,6 +111,24 @@ class AudioPlayerModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    @ReactMethod
+    fun playBeep(toneType: String, promise: Promise) {
+        try {
+            val toneGenerator = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 100)
+            val tone = when (toneType.lowercase()) {
+                "start", "beep" -> android.media.ToneGenerator.TONE_PROP_BEEP
+                "stop", "release", "click" -> android.media.ToneGenerator.TONE_PROP_ACK
+                "cancel", "error" -> android.media.ToneGenerator.TONE_PROP_NACK
+                else -> android.media.ToneGenerator.TONE_PROP_BEEP
+            }
+            toneGenerator.startTone(tone, 150)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            android.util.Log.e("AudioPlayerModule", "Failed to play beep tone: $toneType", e)
+            promise.reject("ERR_BEEP", e.message, e)
+        }
+    }
+
     private fun releasePlayer() {
         mediaPlayer?.let {
             try {

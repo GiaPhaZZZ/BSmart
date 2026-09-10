@@ -5,8 +5,20 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo } from 'react-native';
 import { AppState, BleConnectionState, LogEntry } from '../types';
-import { getBleService, getMockBleService, BleAutoConnectService } from '../services/ble';
+import {
+  getBleService,
+  getMockBleService,
+  setUseMockBle,
+  isUsingMockBle,
+  BleAutoConnectService,
+} from '../services/ble';
+import { requestBlePermissions } from '../services/ble/BlePermissionService';
+import {
+  startBackgroundService,
+  stopBackgroundService,
+} from '../services/background/ForegroundService';
 import { transcribeAudio, askQA } from '../services/api/ApiService';
 import { transcribeAudioOnDevice } from '../services/ai/OnDeviceAsrService';
 import { askQAOnDevice } from '../services/ai/OnDeviceVlmService';
@@ -14,6 +26,9 @@ import { speakViaBle, speakUrgent, stopSpeaking } from '../services/tts/TtsServi
 import {
   playFeatureActivationSound,
   stopFeatureSound,
+  playPttStartFeedback,
+  playPttEndFeedback,
+  playCancelFeedback,
 } from '../services/audio/SoundEffectService';
 import {
   processNavigationFrame,
@@ -70,6 +85,12 @@ export interface AppStateMachineResult {
   logs: LogEntry[];
   currentImage: string | null;
   useMock: boolean;
+  isMockBle: boolean;
+  toggleMockBle: (enabled: boolean) => void;
+  // Blind mode & hardware PTT actions
+  onButtonHold: () => void;
+  onButtonRelease: () => void;
+  onShortPress: () => void;
   // Mock controls
   onMockButtonHold: () => void;
   onMockButtonRelease: () => void;
@@ -85,8 +106,9 @@ export function useAppStateMachine(): AppStateMachineResult {
   const [connectionState, setConnectionState] = useState<BleConnectionState>(
     BleConnectionState.DISCONNECTED,
   );
+  const [isMockBle, setIsMockBle] = useState(isUsingMockBle());
   const [logs, setLogs] = useState<LogEntry[]>([
-    makeLog('BSmart App started. Mock BLE active.'),
+    makeLog(`BSmart App started. ${isUsingMockBle() ? 'Mock BLE' : 'Real BLE'} active.`),
   ]);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
 
@@ -119,11 +141,13 @@ export function useAppStateMachine(): AppStateMachineResult {
 
   // ─── Return to IDLE (short press handler) ───────────────────────────
   const returnToIdle = useCallback(async () => {
+    playCancelFeedback();
     stopSpeaking();
     stopFeatureSound();
     stopNavigation();
     resetCooldowns();
     transitionTo(AppState.IDLE);
+    AccessibilityInfo.announceForAccessibility('Đã về trang chủ');
     addLog('Short press → return to IDLE');
     try {
       await speakViaBle('Đã về trang chủ', bleService.current);
@@ -141,6 +165,12 @@ export function useAppStateMachine(): AppStateMachineResult {
     isProcessingFrame.current = false;
     if (mockService.current) {
       mockService.current.stopAutoImage();
+    }
+    // Send NAV_STOP command to ESP32 to stop auto 4s camera capture
+    if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
+      bleService.current.sendAudio('NAV_STOP').catch(err => {
+        console.warn('[BLE] Failed to send NAV_STOP to glasses:', err);
+      });
     }
   }
 
@@ -198,6 +228,8 @@ export function useAppStateMachine(): AppStateMachineResult {
   const handleButtonHold = useCallback(async () => {
     const state = appStateRef.current;
     addLog('Button HOLD');
+    playPttStartFeedback();
+    AccessibilityInfo.announceForAccessibility('Đang lắng nghe, hãy nói lệnh');
 
     if (state === AppState.IDLE || state === AppState.FEATURE_1_QA) {
       transitionTo(AppState.LISTENING);
@@ -216,6 +248,8 @@ export function useAppStateMachine(): AppStateMachineResult {
   const handleButtonRelease = useCallback(async () => {
     const state = appStateRef.current;
     addLog('Button RELEASE');
+    playPttEndFeedback();
+    AccessibilityInfo.announceForAccessibility('Đã gửi lệnh, đang xử lý');
 
     if (state !== AppState.LISTENING) return;
 
@@ -292,6 +326,13 @@ export function useAppStateMachine(): AppStateMachineResult {
   async function captureAndSave() {
     try {
       addLog('Feature 2: capturing image...');
+      // Request immediate photo capture from ESP32 camera
+      if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
+        await bleService.current.sendAudio('CAPTURE').catch(err => {
+          console.warn('[BLE] Failed to send CAPTURE to glasses:', err);
+        });
+      }
+
       const savedFilename = await saveCapturedImage(capturedImageRef.current);
       addLog(`Feature 2: image saved to local storage (${savedFilename})`);
       await speakViaBle(
@@ -314,6 +355,12 @@ export function useAppStateMachine(): AppStateMachineResult {
     resetCooldowns();
     if (mockService.current) {
       mockService.current.startAutoImage(NAVIGATION_FRAME_INTERVAL_MS);
+    }
+    // Send NAV_START command to ESP32 to start auto 4s camera capture
+    if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
+      bleService.current.sendAudio('NAV_START').catch(err => {
+        console.warn('[BLE] Failed to send NAV_START to glasses:', err);
+      });
     }
   }
 
@@ -388,18 +435,50 @@ export function useAppStateMachine(): AppStateMachineResult {
     mockService.current?.simulateImage();
   }, []);
 
+  const toggleMockBle = useCallback(
+    (enabled: boolean) => {
+      setUseMockBle(enabled);
+      bleService.current = getBleService();
+      mockService.current = getMockBleService();
+      setIsMockBle(enabled);
+      addLog(`Chuyển chế độ BLE: ${enabled ? 'Mock BLE' : 'Real BLE'}`);
+    },
+    [addLog],
+  );
+
   const onConnect = useCallback(async () => {
     try {
-      addLog('Connecting to glasses...');
+      if (!isUsingMockBle()) {
+        addLog('Đang yêu cầu cấp quyền Bluetooth...');
+        const granted = await requestBlePermissions();
+        if (!granted) {
+          addLog('Chưa có đủ quyền Bluetooth/Vị trí', 'warn');
+          AccessibilityInfo.announceForAccessibility('Chưa có đủ quyền Bluetooth');
+          await speakViaBle(
+            'Chưa được cấp quyền Bluetooth, vui lòng cho phép trong cài đặt ứng dụng',
+            bleService.current,
+          ).catch(() => {});
+          return;
+        }
+      }
+
+      addLog('Đang tìm và kết nối kính...');
+      AccessibilityInfo.announceForAccessibility('Đang kết nối với kính');
       await bleService.current.connect();
+      // Start background foreground service to keep connection alive when screen is locked
+      await startBackgroundService();
     } catch (e: any) {
-      addLog(`Connect failed: ${e?.message ?? e}`, 'error');
+      addLog(`Kết nối thất bại: ${e?.message ?? e}`, 'error');
+      AccessibilityInfo.announceForAccessibility('Kết nối kính thất bại');
     }
   }, [addLog]);
 
   const onDisconnect = useCallback(async () => {
     try {
       await bleService.current.disconnect();
+      await stopBackgroundService();
+      AccessibilityInfo.announceForAccessibility('Đã ngắt kết nối kính');
+      addLog('Đã ngắt kết nối kính');
     } catch (e: any) {
       addLog(`Disconnect error: ${e?.message ?? e}`, 'error');
     }
@@ -410,7 +489,12 @@ export function useAppStateMachine(): AppStateMachineResult {
     connectionState,
     logs,
     currentImage,
-    useMock: mockService.current !== null,
+    useMock: isMockBle,
+    isMockBle,
+    toggleMockBle,
+    onButtonHold: handleButtonHold,
+    onButtonRelease: handleButtonRelease,
+    onShortPress: handleShortPress,
     onMockButtonHold,
     onMockButtonRelease,
     onMockShortPress,

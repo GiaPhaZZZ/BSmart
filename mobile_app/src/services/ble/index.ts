@@ -7,20 +7,35 @@ import { IBleService } from '../../types';
 import { MockBleService } from './MockBleService';
 import { BlePlxService } from './BlePlxService';
 
-// Set to false when real ESP32 hardware is available
-export const USE_MOCK_BLE = true;
+// Default to Real BLE (false) so that the Bluetooth button actually opens BLE connection.
+// Can be toggled at runtime in settings or for emulator testing.
+let _useMockBle = false;
+
+export const USE_MOCK_BLE = false;
 
 let _bleServiceInstance: IBleService | null = null;
 
+export function isUsingMockBle(): boolean {
+  return _useMockBle;
+}
+
+export function setUseMockBle(enabled: boolean): IBleService {
+  if (_useMockBle !== enabled || !_bleServiceInstance) {
+    _useMockBle = enabled;
+    _bleServiceInstance = enabled ? new MockBleService() : new BlePlxService();
+  }
+  return _bleServiceInstance;
+}
+
 export function getBleService(): IBleService {
   if (!_bleServiceInstance) {
-    _bleServiceInstance = USE_MOCK_BLE ? new MockBleService() : new BlePlxService();
+    _bleServiceInstance = _useMockBle ? new MockBleService() : new BlePlxService();
   }
   return _bleServiceInstance;
 }
 
 /**
- * Get typed mock service for simulation helpers (only when USE_MOCK_BLE is true)
+ * Get typed mock service for simulation helpers (only when Mock BLE is active)
  */
 export function getMockBleService(): MockBleService | null {
   const svc = getBleService();

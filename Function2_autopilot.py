@@ -1,67 +1,49 @@
 # ============================================================================
-# Blind Navigation Vision Pipeline (v4)
+# Blind Navigation Vision Pipeline (v5.1)
 #
-# WHAT CHANGED FROM v3, AND WHY
+# WHAT CHANGED FROM v4, AND WHY
 # ----------------------------------------------------------------------------
-# 1. "yolo26s-depth.pt" (one fused detector+depth model) is REPLACED by two
-#    real, separate models, as you asked:
-#       - ultralytics YOLO26s           -> object detection
-#       - ZipDepth (fabiotosi92/ZipDepth) -> monocular depth
+# Added the stair/hole hazard classifier you trained
+# (yolo26s_normal_stair_hole.pt, a YOLO26s *classification* checkpoint --
+# same architecture family as the detector, different head) into the
+# AUTOPILOT / continuous glasses loop ONLY (run_on_glasses, section 16).
+# It is intentionally NOT wired into run_image_to_audio (the single-shot
+# CLI path) -- you asked specifically for "Function 2 - autopilot".
 #
-# 2. ROOT CAUSE of "even a clear road says NO CLEAR PATH":
-#    ZipDepth (like MiDaS / Depth-Anything-style models) predicts
-#    *affine-invariant relative inverse depth* -- its own README/eval code
-#    says so explicitly ("ZipDepth predicts affine-invariant inverse depth...
-#    aligned with a least-squares scale-and-shift before metrics"). It is
-#    NOT metric depth in meters, and it has no fixed "1 unit = 1 meter"
-#    scale from one image to the next.
+# How it works, matching your notebook snippet 1:1:
+#   - model.predict(source=frame, imgsz=224, device=..., verbose=False)
+#   - results[0].probs.top1 / top1conf  (classification, not boxes)
+#   - imgsz=224 is kept because that's what the checkpoint was trained/
+#     evaluated at in your notebook -- changing it would shift the
+#     accuracy numbers you already validated, so it's its own CONFIG key
+#     (stair_hole_imgsz) instead of reusing zipdepth_input_size.
 #
-#    v3's FreeSpacePathAdvisor treated the raw depth map as if it were
-#    already in meters (thresholds like `path_min_clear_m = 1.0`,
-#    `path_drop_delta_m = 0.6`). Two things then guaranteed constant false
-#    alarms:
-#       a) The absolute-meter thresholds were being compared against
-#          unscaled numbers that have no meter meaning at all.
-#       b) Even if the scale had been right, a band of pixels near the
-#          bottom of the image will *always* show a big near/far depth
-#          spread on a perfectly flat road, purely from perspective (the
-#          top of a 0.55-0.85 band is simply much farther away than the
-#          bottom of that band). Comparing that spread to a flat threshold
-#          means flat ground is indistinguishable from an actual drop.
+# Confidence gating ("say nothing" rule):
+#   - StairHoleClassifier.classify() returns None (no hazard) unless
+#     BOTH: (a) top1conf >= CONFIG["stair_hole_conf_threshold"], AND
+#     (b) the winning class name actually contains "stair" or "hole".
+#     A predicted "normal"/"none"/"flat"/etc. class, or a low-confidence
+#     stair/hole prediction, produces no message at all -- it does not
+#     fall back to any other text, per your "say nothing" requirement.
+#   - When it *does* fire, it's turned into one extra spoken Vietnamese
+#     message ("Có bậc thang." / "Có hố.") with its own cooldown, the
+#     same pattern already used for the terrain
+#     ("Địa hình chênh vênh...") message.
 #
-#    THE FIX (implemented in GroundPlaneModel / FreeSpacePathAdvisor below)
-#    is the standard technique used for curb/pothole detection in mobility
-#    aids and ADAS free-space systems (v-disparity / inverse perspective
-#    mapping): using the camera's height + pitch + FOV, we compute what
-#    depth a perfectly FLAT ground plane *should* produce at every image
-#    row. We then robustly fit ZipDepth's raw (unitless) output to that
-#    expected curve to recover a real per-frame meters scale, and classify
-#    each column by how much it DEVIATES from the flat-ground expectation
-#    (the residual) rather than by its raw near/far spread. Flat ground now
-#    has ~0 residual everywhere (CLEAR); a real drop shows a large positive
-#    residual (STEP_DOWN); a curb/small obstacle shows a large negative
-#    residual (BLOCKED). Verified on synthetic ground truth in
-#    ground_plane_test.py (flat -> all CLEAR, injected step -> only that
-#    column flags, injected curb -> only that column flags).
+# UPDATE (v5.1): your hazard checkpoint was retrained with 3 classes --
+# normal / stair / hole (previously it was a 2-class stair / pothole
+# model). The checkpoint file is now yolo26s_normal_stair_hole.pt. Every
+# "pothole" reference below (config keys, class names, variable names,
+# the classifier class itself) has been renamed to "hole" to match the
+# new class name -- e.g. StairPotholeClassifier -> StairHoleClassifier,
+# CONFIG["stair_pothole_*"] -> CONFIG["stair_hole_*"]. The actual logic
+# is unchanged: it still only speaks when the model is confident AND the
+# winning class is recognizably "stair" or "hole" -- a predicted "normal"
+# (or anything below threshold) still produces no message and is never
+# added to the warning text.
 #
-# 3. A SECOND, independent bug in v3: a column that had an object detection
-#    in it was force-labeled "CLEAR" ("object detector already explains
-#    this region"), which meant the green "WALK AHEAD" arrow could point
-#    straight at a column containing a tracked pedestrian or car. Fixed by
-#    just letting the geometric classifier run everywhere -- an occupied
-#    column now gets its own true BLOCKED/STEP_DOWN/CLEAR verdict, and the
-#    object itself is still separately announced (with distance + TTC) by
-#    the existing AnnouncementManager.
-#
-# 4. Added the missing pieces you asked for: an image -> Vietnamese
-#    warning -> Piper TTS -> .wav audio path (run_image_to_audio), on top
-#    of the existing webcam / glasses loops.
-#
-# 5. Everything here runs on CPU by default (matches setup_glass.sh). For
-#    the phone target, ZipDepth already ships scripts/export.py to produce
-#    ONNX / TorchScript -- swap ZipDepthEstimator's backend once you've
-#    exported, the rest of the pipeline (calibration, tracking, TTS) is
-#    backend-agnostic because it only touches the returned HxW numpy array.
+# Everything else below (ground-plane depth calibration, per-object
+# tracking, path advisor, TTS, etc.) is unchanged from v4.
 # ============================================================================
 
 import time
@@ -223,6 +205,24 @@ CONFIG = {
     "path_cooldown_s": 4.0,
 
     # ------------------------------------------------------------------
+    # STAIR / HOLE HAZARD CLASSIFIER (autopilot / run_on_glasses ONLY)
+    # ------------------------------------------------------------------
+    # Separate YOLO26s *classification* checkpoint (not the COCO detector
+    # above). Whole-frame classify -> normal / stair / hole (3 classes,
+    # matching your training notebook's stair_hole_normal_cls dataset).
+    # Only used by run_on_glasses.
+    "stair_hole_model_path": "yolo26s_normal_stair_hole.pt",
+    "stair_hole_imgsz": 224,          # matches the notebook eval you validated it at
+    "stair_hole_conf_threshold": 0.4,
+    "stair_hole_cooldown_s": 4.0,
+    # Any predicted class whose name is in this set (or that doesn't
+    # contain "stair"/"hole" at all) is treated as "no hazard", no
+    # matter how high its confidence is. "normal" is the actual trained
+    # class name; the rest are kept as defensive fallbacks in case you
+    # ever retrain with different "no hazard" folder names.
+    "stair_hole_ignore_labels": {"normal", "none", "flat", "background", "other", "ground", "safe"},
+
+    # ------------------------------------------------------------------
     # PATH VISUALIZATION
     # ------------------------------------------------------------------
     "draw_path": True,
@@ -245,7 +245,7 @@ CONFIG = {
 
 
 # ============================================================================
-# 2. COCO CLASSES / VIETNAMESE LABELS  (unchanged from v3)
+# 2. COCO CLASSES / VIETNAMESE LABELS  (unchanged from v3/v4)
 # ============================================================================
 
 KEEP_CLASSES = {
@@ -273,6 +273,17 @@ BROAD_SIDE = {"FAR LEFT": "LEFT", "LEFT": "LEFT", "AHEAD": "AHEAD", "RIGHT": "RI
 BROAD_SIDE_VI = {"LEFT": "bên trái", "AHEAD": "phía trước", "RIGHT": "bên phải"}
 HEIGHT_VI = {"HEAD-LEVEL": "trên đầu", "GROUND-LEVEL": "trên mặt đất", "BODY-LEVEL": "ngang ngực"}
 WARNING_VI = {"DANGER": "NGUY HIỂM", "WARNING": "CHÚ Ý"}
+
+# Vietnamese phrasing for the stair/hole hazard classifier. Keyed by the
+# normalized hazard_key ("stair" / "hole") that StairHoleClassifier
+# resolves the model's raw class name to -- see that class below.
+# Kept short and direct on purpose (no "Phía trước" / "ahead" prefix) --
+# just "có bậc thang" / "có hố". _build_stair_hole_message capitalizes
+# the first letter since it's spoken as its own sentence.
+STAIR_HOLE_PHRASE_VI = {
+    "stair": "có bậc thang",
+    "hole": "có hố",
+}
 
 # ------------------------------------------------------------------
 # ANNOUNCEMENT PRIORITY BY CLASS
@@ -596,6 +607,96 @@ class Yolo26Detector:
 
 
 # ============================================================================
+# 6b. STAIR / HOLE HAZARD CLASSIFIER  (autopilot only -- new in v5)
+# ============================================================================
+
+class StairHoleClassifier:
+    """
+    Wraps the separate YOLO26s *classification* checkpoint
+    (yolo26s_normal_stair_hole.pt) you trained on normal / stair / hole
+    crops -- this is NOT the COCO object detector (Yolo26Detector, section
+    6). It just answers "does this whole frame look like a stair or a
+    hole hazard", the same way your notebook uses it:
+
+        results = model.predict(source=image, imgsz=224, device=..., verbose=False)
+        probs = results[0].probs
+        label, confidence = results[0].names[probs.top1], float(probs.top1conf)
+
+    Used ONLY by the autopilot / continuous glasses loop (run_on_glasses,
+    section 16) -- see run_image_to_audio's docstring/comment for why it's
+    kept out of the single-image path.
+
+    "Say nothing" behavior lives entirely in classify(): it returns None
+    (no hazard) whenever confidence is below threshold OR the winning
+    class isn't recognizably "stair" or "hole" -- there is no other
+    fallback text produced from this classifier. In particular, a
+    predicted "normal" class (whatever its confidence) always returns
+    None and is never added to the warning text.
+    """
+
+    def __init__(self, model_path, imgsz, conf_threshold, ignore_labels, device="cpu", verbose_print=True):
+        self.model = YOLO(model_path)
+        self.imgsz = imgsz
+        self.conf_threshold = conf_threshold
+        self.ignore_labels = {s.lower() for s in ignore_labels}
+        self.device = device
+        # New: print the raw classify() result every cycle (label + confidence
+        # + pass/fail) purely so you can eyeball the model's live behavior --
+        # this is independent of whether it ends up in the spoken warning.
+        self.verbose_print = verbose_print
+
+    def classify(self, image_bgr):
+        """Returns (hazard_key, raw_label, confidence) if this frame is a
+        confident stair/hole hazard, else None.
+
+        hazard_key is normalized to 'stair' or 'hole' via a substring
+        match on the model's own class name, so this keeps working
+        whichever exact folder names you trained on (e.g. 'stairs',
+        'staircase', 'hole', 'holes', ...). Anything else (a 'normal'/
+        'flat'/'background'-type class, or low confidence) -> None.
+
+        Regardless of the outcome, every call is printed (if verbose_print)
+        so you can evaluate the raw model output frame-by-frame -- the
+        warning/announcement logic downstream is unaffected by this and
+        still only fires when the threshold is actually reached.
+        """
+        results = self.model.predict(
+            source=image_bgr, imgsz=self.imgsz, device=self.device, verbose=False,
+        )
+        if not results or results[0].probs is None:
+            if self.verbose_print:
+                print("[stair/hole] no prediction returned this frame")
+            return None
+
+        probs = results[0].probs
+        raw_label = results[0].names[int(probs.top1)]
+        confidence = float(probs.top1conf)
+        label_lower = raw_label.lower()
+
+        below_threshold = confidence < self.conf_threshold
+        ignored_class = label_lower in self.ignore_labels
+        not_hazard_word = ("stair" not in label_lower) and ("hole" not in label_lower)
+
+        if below_threshold:
+            verdict = f"below threshold ({self.conf_threshold:.2f}) -- no warning"
+        elif ignored_class:
+            verdict = "ignored class -- no warning"
+        elif not_hazard_word:
+            verdict = "not a stair/hole class -- no warning"
+        else:
+            verdict = "HAZARD -- added to warning"
+
+        if self.verbose_print:
+            print(f"[stair/hole] label={raw_label!r} conf={confidence:.3f} -> {verdict}")
+
+        if below_threshold or ignored_class or not_hazard_word:
+            return None
+
+        hazard_key = "stair" if "stair" in label_lower else "hole"
+        return hazard_key, raw_label, confidence
+
+
+# ============================================================================
 # 7. OBJECT DISTANCE FROM (CALIBRATED, METRIC) DEPTH MAP
 # ============================================================================
 
@@ -628,7 +729,7 @@ def robust_object_distance(metric_depth_map, x1, y1, x2, y2, height_zone, image_
 
 
 # ============================================================================
-# 8. TRACK / TRACKER / TTC / WARNING LEVEL / PRIORITY  (unchanged from v3)
+# 8. TRACK / TRACKER / TTC / WARNING LEVEL / PRIORITY  (unchanged from v3/v4)
 # ============================================================================
 
 @dataclass
@@ -918,15 +1019,16 @@ def draw_navigation_output(image, tracks, path_status):
 
 
 # ============================================================================
-# 11. ANNOUNCEMENT MANAGER  (unchanged logic from v3)
+# 11. ANNOUNCEMENT MANAGER
 # ============================================================================
 
 class AnnouncementManager:
     def __init__(self):
         self.last_any_announcement_ts = -1e9
-        self.path_cooldowns = {}
+        self.path_cooldowns = {}   # shared cooldown store: "path_blocked", "stair_hole:stair", etc.
 
-    def build_messages(self, tracks, now, extra_latency_s=0.0, path_status=None):
+    def build_messages(self, tracks, now, extra_latency_s=0.0, path_status=None,
+                        stair_hole_hazard=None):
         candidates = []
         person_confirmed = 0
 
@@ -994,6 +1096,15 @@ class AnnouncementManager:
             if path_msg is not None:
                 messages.append(path_msg)
 
+        # Stair/hole hazard message (autopilot only -- new in v5).
+        # stair_hole_hazard is either None ("say nothing": below
+        # confidence, "normal" prediction, or not a stair/hole class) or
+        # (hazard_key, raw_label, confidence) from StairHoleClassifier.
+        if stair_hole_hazard is not None and len(messages) < CONFIG["max_announcements_per_cycle"]:
+            sp_msg = self._build_stair_hole_message(stair_hole_hazard, now)
+            if sp_msg is not None:
+                messages.append(sp_msg)
+
         return messages
 
     def _build_path_message(self, path_status, now):
@@ -1010,6 +1121,27 @@ class AnnouncementManager:
             return None
         self.path_cooldowns[key] = now
         return {"text": phrase + ".", "priority": -10.0, "key": key, "warning": "WARNING"}
+
+    def _build_stair_hole_message(self, hazard, now):
+        """hazard is (hazard_key, raw_label, confidence) or None. Only
+        speaks when the classifier was confident AND recognized the class
+        as stair/hole (that gating already happened inside
+        StairHoleClassifier.classify) -- here we only add the per-hazard
+        cooldown so it doesn't repeat every single capture cycle."""
+        if hazard is None:
+            return None
+        hazard_key, raw_label, confidence = hazard
+        phrase = STAIR_HOLE_PHRASE_VI.get(hazard_key)
+        if phrase is None:
+            return None
+        key = f"stair_hole:{hazard_key}"
+        if now - self.path_cooldowns.get(key, -1e9) < CONFIG["stair_hole_cooldown_s"]:
+            return None
+        self.path_cooldowns[key] = now
+        return {
+            "text": _capitalize_vi(phrase) + ".", "priority": -20.0, "key": key, "warning": "WARNING",
+            "raw_label": raw_label, "confidence": confidence,
+        }
 
     @staticmethod
     def _format_clause(track, distance, closing_speed):
@@ -1029,7 +1161,7 @@ class AnnouncementManager:
 
 
 # ============================================================================
-# 11b. COMBINED AUDIO SENTENCE
+# 11b. COMBINED AUDIO SENTENCE  (used by run_image_to_audio, section 15)
 # ----------------------------------------------------------------------------
 # Turns the list of per-object messages + the raw path_status into ONE
 # natural spoken sentence, no repeated "CHÚ Ý"/"NGUY HIỂM" per item.
@@ -1041,6 +1173,15 @@ class AnnouncementManager:
 # (bags, bottles, static street furniture, ...) are filtered out earlier
 # so they never clutter the audio. Only the closest object per side is
 # spoken, capped at `max_items` sides total.
+#
+# NOTE: run_on_glasses (autopilot) does NOT use this function -- it speaks
+# each message from build_messages() individually through SpeechQueue, so
+# the stair/hole message reaches speech there without going through this
+# function at all. run_image_to_audio DOES use this function to build the
+# one combined sentence it hands to TTS, so this function must explicitly
+# pull the stair/hole message out of `messages` itself -- it used to only
+# look at crowd/object/path entries and silently dropped the stair/hole
+# message even though it was correctly present in `messages`.
 # ============================================================================
 
 def build_audio_text_vi(messages, path_status, max_items=3):
@@ -1053,10 +1194,17 @@ def build_audio_text_vi(messages, path_status, max_items=3):
           e.g. "Phía trước có xe hơi cách 3 mét, bên phải có người cách 1
           mét." Objects were already filtered to critical/important-tier
           by AnnouncementManager.build_messages before reaching here.
-        - path/terrain sentence last, using build_path_phrase_vi.
+        - path/terrain sentence next, using build_path_phrase_vi.
+        - stair/hole hazard sentence(s) last (e.g. "Có bậc thang." /
+          "Có hố."). Picked out of `messages` by key prefix "stair_hole:" --
+          AnnouncementManager already did all the gating (confidence
+          threshold, recognized class, per-hazard cooldown) before this
+          message ever landed in `messages`, so if it's here it's meant
+          to be spoken; this function just needs to not drop it.
     """
     crowd = next((m for m in messages if m.get("key") == "CROWD"), None)
     object_msgs = [m for m in messages if "clause" in m]
+    stair_hole_msgs = [m for m in messages if m.get("key", "").startswith("stair_hole:")]
 
     best_per_side = {}
     for m in object_msgs:
@@ -1076,6 +1224,9 @@ def build_audio_text_vi(messages, path_status, max_items=3):
     path_phrase = build_path_phrase_vi(path_status, include_clear=True)
     if path_phrase is not None:
         sentences.append(path_phrase + ".")
+
+    for m in stair_hole_msgs:
+        sentences.append(m["text"])  # already ends with "." -- see _build_stair_hole_message
 
     if not sentences:
         return "Đường phía trước có vẻ an toàn."
@@ -1115,7 +1266,12 @@ class PiperTTSVi:
 # ============================================================================
 
 def process_frame(image, detector, depth_estimator, ground_plane, tracker,
-                   announcer, timestamp, path_advisor=None):
+                   announcer, timestamp, path_advisor=None,
+                   stair_hole_classifier=None):
+    """stair_hole_classifier is optional and defaults to None so this
+    function's behavior is unchanged for run_image_to_audio (which does
+    not pass one by default). run_on_glasses (autopilot) passes an
+    instance of StairHoleClassifier -- see section 16."""
     height, width = image.shape[:2]
 
     # ---- Depth (raw, unitless, affine-invariant) ----
@@ -1173,18 +1329,40 @@ def process_frame(image, detector, depth_estimator, ground_plane, tracker,
     if path_advisor is not None and metric_depth is not None:
         path_status = path_advisor.analyze(metric_depth, expected_rows, width, height)
 
+    # ---- Stair / hole hazard classification (autopilot only) ----
+    stair_hole_hazard = None
+    if stair_hole_classifier is not None:
+        stair_hole_hazard = stair_hole_classifier.classify(image)
+
     processing_elapsed = time.time() - timestamp
     extra_latency_s = processing_elapsed + CONFIG["tts_onset_latency_s"]
-    messages = announcer.build_messages(tracks, timestamp, extra_latency_s=extra_latency_s, path_status=path_status)
+    messages = announcer.build_messages(
+        tracks, timestamp, extra_latency_s=extra_latency_s,
+        path_status=path_status, stair_hole_hazard=stair_hole_hazard,
+    )
 
-    return metric_depth, detections, tracks, messages, path_status
+    return metric_depth, detections, tracks, messages, path_status, stair_hole_hazard
 
 
 # ============================================================================
 # 14. BUILD PIPELINE
 # ============================================================================
 
+def build_stair_hole_classifier():
+    """Shared constructor for StairHoleClassifier so both entry points
+    (run_image_to_audio and run_on_glasses) build it the same way from
+    CONFIG, instead of duplicating the argument list in two places."""
+    return StairHoleClassifier(
+        model_path=CONFIG["stair_hole_model_path"],
+        imgsz=CONFIG["stair_hole_imgsz"],
+        conf_threshold=CONFIG["stair_hole_conf_threshold"],
+        ignore_labels=CONFIG["stair_hole_ignore_labels"],
+        device=CONFIG["zipdepth_device"],  # reuse the same cpu/cuda choice as the rest of the pipeline
+    )
+
+
 def build_pipeline():
+    """Builds the core pipeline shared by both entry points."""
     detector = Yolo26Detector(CONFIG["detector_model_path"], KEEP_CLASSES)
     depth_estimator = ZipDepthEstimator(
         checkpoint_path=CONFIG["zipdepth_checkpoint"],
@@ -1206,11 +1384,26 @@ def build_pipeline():
 
 
 # ============================================================================
-# 15. SINGLE IMAGE -> VIETNAMESE WARNING -> AUDIO  (main entry point you asked for)
+# 15. SINGLE IMAGE -> VIETNAMESE WARNING -> AUDIO  (Function 1 -- unchanged)
 # ============================================================================
 
-def run_image_to_audio(image_path, out_wav_path="out.wav", out_image_path=None, verbose=True):
+def run_image_to_audio(image_path, out_wav_path="out.wav", out_image_path=None, verbose=True,
+                        run_stair_hole=True):
+    """Single-shot path. run_stair_hole=True (default) now also runs
+    StairHoleClassifier on the image so you can evaluate it from a
+    single test photo -- classify() prints its raw label+confidence
+    every call (see verbose_print on StairHoleClassifier), and the
+    result is still only added to the spoken warning if it clears
+    stair_hole_conf_threshold and is a recognized stair/hole class
+    (a "normal" prediction never gets added, regardless of confidence);
+    otherwise it stays out of `messages` exactly like in autopilot mode.
+    Pass run_stair_hole=False to skip loading that model entirely."""
     detector, depth_estimator, ground_plane, tracker, announcer, path_advisor = build_pipeline()
+    print(f"[DEBUG] run_stair_hole={run_stair_hole} -- about to build classifier..." if run_stair_hole
+          else "[DEBUG] run_stair_hole=False -- classifier will NOT run")
+    stair_hole_classifier = build_stair_hole_classifier() if run_stair_hole else None
+    if stair_hole_classifier is not None:
+        print(f"[DEBUG] classifier loaded from: {CONFIG['stair_hole_model_path']}")
 
     CONFIG["confirm_frames"] = 1  # single-shot: don't wait for a 2nd frame to "confirm" a track
     CONFIG["min_gap_between_any_announcement_s"] = 0.0
@@ -1221,8 +1414,9 @@ def run_image_to_audio(image_path, out_wav_path="out.wav", out_image_path=None, 
         raise FileNotFoundError(f"Could not read image at: {image_path}")
 
     timestamp = time.time()
-    metric_depth, detections, tracks, messages, path_status = process_frame(
+    metric_depth, detections, tracks, messages, path_status, stair_hole_hazard = process_frame(
         image, detector, depth_estimator, ground_plane, tracker, announcer, timestamp, path_advisor,
+        stair_hole_classifier,
     )
 
     if verbose:
@@ -1244,6 +1438,11 @@ def run_image_to_audio(image_path, out_wav_path="out.wav", out_image_path=None, 
                 "prior-frame fallback exists for a single standalone image, "
                 "so terrain status is reported as unknown rather than guessed."
             )
+        if stair_hole_hazard is not None:
+            hazard_key, raw_label, confidence = stair_hole_hazard
+            print(f"\nSTAIR/HOLE: {hazard_key} (label={raw_label!r}, conf={confidence:.3f}) -- IN WARNING")
+        elif run_stair_hole:
+            print("\nSTAIR/HOLE: no hazard above threshold this frame (see per-call log above)")
 
     audio_text = build_audio_text_vi(messages, path_status)
     tts = PiperTTSVi(CONFIG["piper_voice_path"])
@@ -1261,7 +1460,7 @@ def run_image_to_audio(image_path, out_wav_path="out.wav", out_image_path=None, 
 
 
 # ============================================================================
-# 16. CONTINUOUS VIDEO / GLASSES LOOPS  (same shape as v3, wired to the new pieces)
+# 16. CONTINUOUS VIDEO / GLASSES LOOPS  (Function 2 = run_on_glasses = "autopilot")
 # ============================================================================
 
 class SpeechQueue:
@@ -1325,7 +1524,13 @@ def make_piper_speak_fn(voice_path):
 
 
 def run_on_glasses(capture_fn, speak_fn, stop_fn=None, max_cycles=None):
+    """AUTOPILOT / continuous loop. This is the only place
+    StairHoleClassifier is built and used, per your request -- it is
+    NOT used by run_image_to_audio (section 15) unless you pass
+    run_stair_hole=True there too."""
     detector, depth_estimator, ground_plane, tracker, announcer, path_advisor = build_pipeline()
+    stair_hole_classifier = build_stair_hole_classifier()
+
     scheduler = CaptureScheduler()
     speech_queue = SpeechQueue(speak_fn, stop_fn)
     cycles = 0
@@ -1334,8 +1539,9 @@ def run_on_glasses(capture_fn, speak_fn, stop_fn=None, max_cycles=None):
         messages = []
         if frame is not None:
             timestamp = time.time()
-            _, _, _, messages, _ = process_frame(
-                frame, detector, depth_estimator, ground_plane, tracker, announcer, timestamp, path_advisor,
+            _, _, _, messages, _, _ = process_frame(
+                frame, detector, depth_estimator, ground_plane, tracker, announcer, timestamp,
+                path_advisor, stair_hole_classifier,
             )
             speech_queue.enqueue(messages)
         cycles += 1
@@ -1358,7 +1564,9 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", default=None, help="Override CONFIG['zipdepth_checkpoint']")
     parser.add_argument("--voice", default=None, help="Override CONFIG['piper_voice_path'] (vi_VN .onnx)")
     parser.add_argument("--yolo", default=None, help="Override CONFIG['detector_model_path']")
+    parser.add_argument("--stair-hole-model", default=None, help="Override CONFIG['stair_hole_model_path']")
     parser.add_argument("--device", default=None, choices=["cpu", "cuda"], help="Override CONFIG['zipdepth_device']")
+    parser.add_argument("--no-stair-hole", action="store_true", help="Skip loading the stair/hole classifier")
     args = parser.parse_args()
 
     if args.checkpoint:
@@ -1367,7 +1575,12 @@ if __name__ == "__main__":
         CONFIG["piper_voice_path"] = args.voice
     if args.yolo:
         CONFIG["detector_model_path"] = args.yolo
+    if args.stair_hole_model:
+        CONFIG["stair_hole_model_path"] = args.stair_hole_model
     if args.device:
         CONFIG["zipdepth_device"] = args.device
 
-    run_image_to_audio(args.image, out_wav_path=args.audio, out_image_path=args.annotated)
+    run_image_to_audio(
+        args.image, out_wav_path=args.audio, out_image_path=args.annotated,
+        run_stair_hole=not args.no_stair_hole,
+    )

@@ -19,6 +19,8 @@ jobs:
   build-apk:
     name: Build Android APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Source Code
@@ -45,6 +47,10 @@ jobs:
       - name: Install Mobile App Dependencies
         working-directory: mobile_app
         run: npm ci
+
+      - name: Regenerate config.json for Linux paths
+        working-directory: mobile_app
+        run: npx react-native config > config.json
 
       - name: Set up Python (for model packaging)
         uses: actions/setup-python@v5

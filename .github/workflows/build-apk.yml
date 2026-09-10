@@ -46,7 +46,9 @@ jobs:
 
       - name: Install Mobile App Dependencies
         working-directory: mobile_app
-        run: npm ci
+        run: |
+          npm ci
+          node scripts/patch-tts.js
 
       - name: Regenerate config.json for Linux paths
         working-directory: mobile_app
@@ -105,7 +107,8 @@ jobs:
         with:
           files: ${{ steps.find-apk.outputs.apk_path }}
           draft: false
-          prerelease: true
+          prerelease: false
+          make_latest: "true"
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

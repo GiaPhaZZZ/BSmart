@@ -23,7 +23,7 @@ import { AppState } from '../src/types';
 
 describe('OnDeviceInference Service (MOD-03 & MOD-04)', () => {
   beforeEach(() => {
-    setInferenceAvailable(null);
+    setInferenceAvailable(true);
     modelRegistry.resetToDefaults();
     resetCooldowns();
   });
@@ -32,7 +32,15 @@ describe('OnDeviceInference Service (MOD-03 & MOD-04)', () => {
     setInferenceAvailable(null);
   });
 
-  test('isInferenceAvailable returns true by default when models are ready', () => {
+  test('isInferenceAvailable returns false by default when models are uninitialized', () => {
+    setInferenceAvailable(null);
+    expect(isInferenceAvailable()).toBe(false);
+  });
+
+  test('isInferenceAvailable returns true when models are marked READY', () => {
+    setInferenceAvailable(null);
+    modelRegistry.setModelStatus('yolo26s', 'READY');
+    modelRegistry.setModelStatus('zipdepth', 'READY');
     expect(isInferenceAvailable()).toBe(true);
   });
 
@@ -105,28 +113,31 @@ describe('OnDeviceAsrService (MOD-01)', () => {
     expect(matchVoiceCommand('hôm nay trời đẹp quá')).toBeNull();
   });
 
-  test('transcribeAudioOnDevice processes base64 audio and identifies command', async () => {
+  test('transcribeAudioOnDevice returns empty transcription when uninitialized or unwired', async () => {
     const res = await transcribeAudioOnDevice('dGVzdGF1ZGlv');
-    expect(res.confidence).toBeGreaterThan(0.8);
-    expect(res.matchedState).toBe(AppState.FEATURE_3_NAVIGATION);
+    expect(res.confidence).toBe(0);
+    expect(res.matchedState).toBeNull();
+    expect(res.text).toBe('');
   });
 });
 
 describe('OnDeviceVlmService (MOD-02)', () => {
-  test('askQAOnDevice handles visual description query', async () => {
-    const res = await askQAOnDevice('mockImage', 'Trước mặt tôi là gì?');
-    expect(res.isSuccess).toBe(true);
-    expect(res.answer).toContain('Trước mặt bạn là');
-  });
-
-  test('askQAOnDevice handles color query', async () => {
-    const res = await askQAOnDevice('mockImage', 'Màu sắc thế nào?');
-    expect(res.isSuccess).toBe(true);
-    expect(res.answer).toContain('tông màu');
-  });
-
   test('askQAOnDevice handles empty image input', async () => {
     const res = await askQAOnDevice('', 'Mô tả ảnh');
     expect(res.isSuccess).toBe(false);
+    expect(res.answer).toContain('Không thể xử lý');
+  });
+
+  test('askQAOnDevice returns honest unavailable status when model is uninitialized', async () => {
+    const res = await askQAOnDevice('mockImage', 'Trước mặt tôi là gì?');
+    expect(res.isSuccess).toBe(false);
+    expect(res.answer).toContain('Không thể xử lý hình ảnh lúc này');
+  });
+
+  test('askQAOnDevice returns offline unavailable message when model is READY but native module absent', async () => {
+    modelRegistry.setModelStatus('smolvlm2', 'READY');
+    const res = await askQAOnDevice('mockImage', 'Trước mặt tôi là gì?');
+    expect(res.isSuccess).toBe(false);
+    expect(res.answer).toContain('chưa sẵn sàng');
   });
 });

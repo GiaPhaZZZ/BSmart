@@ -82,27 +82,13 @@ export async function askQAOnDevice(
     console.warn('[VLM] Native ONNX execution warning, using optimized on-device decoder fallback:', err);
   }
 
-  // 2. High-performance on-device intent decoder fallback (100% Offline)
-  const qLower = question.toLowerCase();
-  let answer: string;
-
-  if (qLower.includes('là gì') || qLower.includes('mô tả') || qLower.includes('thấy gì') || qLower.includes('trước mặt')) {
-    answer = 'Trước mặt bạn là lối đi thông thoáng, có một người đang di chuyển phía bên phải.';
-  } else if (qLower.includes('màu') || qLower.includes('sắc')) {
-    answer = 'Khu vực phía trước có tông màu sáng, ánh sáng tự nhiên rõ ràng.';
-  } else if (qLower.includes('đọc') || qLower.includes('chữ') || qLower.includes('biển')) {
-    answer = 'Có biển báo chỉ dẫn hướng đi bộ an toàn phía trước.';
-  } else if (qLower.includes('vật cản') || qLower.includes('nguy hiểm') || qLower.includes('né')) {
-    answer = 'Không có vật cản nguy hiểm trực tiếp trong phạm vi hai mét.';
-  } else {
-    answer = 'Không gian phía trước quang đãng, bạn có thể an tâm tiếp tục di chuyển.';
-  }
-
+  // On-device SmolVLM2 ONNX not available and no backend reachable.
+  // DO NOT return fabricated scene descriptions — this is a safety-critical feature for
+  // visually impaired users. A fake answer is worse than an honest "unavailable".
+  console.warn('[VLM] SmolVLM2 not available and no backend reachable.');
   return {
-    answer,
-    isSuccess: true,
-    model: 'SmolVLM2-256M-INT8',
-    resolution: SMOLVLM2_CONFIG.inputResolution,
-    maxTokens: SMOLVLM2_CONFIG.maxOutputTokens,
+    answer: 'Tính năng hỏi đáp hình ảnh chưa sẵn sàng. Vui lòng kết nối máy chủ hoặc thử lại sau.',
+    isSuccess: false,
+    model: 'unavailable',
   };
 }

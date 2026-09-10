@@ -46,6 +46,22 @@ jobs:
         working-directory: mobile_app
         run: npm ci
 
+      - name: Set up Python (for model packaging)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Package ONNX Models into Android Assets
+        run: |
+          if [ -d "ai_core/exported_models" ]; then
+            echo "[MOD-04] Found exported_models — packaging into Android assets..."
+            python ai_core/package_models.py
+          else
+            echo "[MOD-04] WARNING: ai_core/exported_models not found."
+            echo "APK will build without on-device AI model weights."
+            echo "Run export scripts first if you need a fully functional APK."
+          fi
+
       - name: Grant Execute Permission to Gradle Wrapper
         working-directory: mobile_app/android
         run: chmod +x gradlew
@@ -53,7 +69,7 @@ jobs:
       - name: Build Android APK
         working-directory: mobile_app/android
         run: |
-          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'debug' }}"
           if [ "$BUILD_TYPE" = "release" ]; then
             ./gradlew assembleRelease --no-daemon
           else

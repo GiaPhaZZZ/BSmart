@@ -86,16 +86,14 @@ export async function transcribeAudioOnDevice(
     };
   }
 
-  // Simulated on-device PhoWhisper decoding for audio streams:
-  // When running locally in offline mode without backend connection,
-  // we recognize standard test commands or provide a graceful transcript.
-  let text = 'tính năng 3'; // default test command if mock audio
-  const matched = matchVoiceCommand(text);
-
+  // On-device PhoWhisper ONNX pipeline not yet wired to Native module.
+  // Return empty result so the caller falls back gracefully (TTS: "Không nhận diện được lệnh").
+  // DO NOT hardcode a fake command here — that causes silent mis-routing in production.
+  console.warn('[ASR] On-device PhoWhisper not available. Returning empty transcript.');
   return {
-    text,
-    matchedState: matched,
-    confidence: 0.95,
+    text: '',
+    matchedState: null,
+    confidence: 0,
   };
 }
 

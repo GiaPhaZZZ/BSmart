@@ -140,6 +140,24 @@ export function useAppStateMachine(): AppStateMachineResult {
     [addLog],
   );
 
+  // ─── Navigation mode helpers ─────────────────────────────────────────
+  const stopNavigation = useCallback(() => {
+    if (navIntervalRef.current !== null) {
+      clearInterval(navIntervalRef.current);
+      navIntervalRef.current = null;
+    }
+    isProcessingFrame.current = false;
+    if (mockService.current) {
+      mockService.current.stopAutoImage();
+    }
+    // Send NAV_STOP command to ESP32 to stop auto 4s camera capture
+    if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
+      bleService.current.sendAudio('NAV_STOP').catch(err => {
+        console.warn('[BLE] Failed to send NAV_STOP to glasses:', err);
+      });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Return to IDLE (short press handler) ───────────────────────────
   const returnToIdle = useCallback(async () => {
     playCancelFeedback();
@@ -155,25 +173,7 @@ export function useAppStateMachine(): AppStateMachineResult {
     } catch {
       // ignore cancellation
     }
-  }, [transitionTo, addLog]);
-
-  // ─── Navigation mode helpers ─────────────────────────────────────────
-  function stopNavigation() {
-    if (navIntervalRef.current !== null) {
-      clearInterval(navIntervalRef.current);
-      navIntervalRef.current = null;
-    }
-    isProcessingFrame.current = false;
-    if (mockService.current) {
-      mockService.current.stopAutoImage();
-    }
-    // Send NAV_STOP command to ESP32 to stop auto 4s camera capture
-    if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
-      bleService.current.sendAudio('NAV_STOP').catch(err => {
-        console.warn('[BLE] Failed to send NAV_STOP to glasses:', err);
-      });
-    }
-  }
+  }, [transitionTo, addLog, stopNavigation]);
 
   async function processNavigationImage(imageBase64: string) {
     if (isProcessingFrame.current) {
@@ -192,21 +192,11 @@ export function useAppStateMachine(): AppStateMachineResult {
         detectedObjects = result.objects;
         addLog(`Nav: inference found ${detectedObjects.length} object(s)`);
       } else {
-        // BLOCKED: On-device models not yet available.
-        // Using mock data to keep navigation flow testable.
-        // Replace this block when OnDeviceInference is unblocked.
-        addLog('Nav: inference BLOCKED — using mock data', 'warn');
-        detectedObjects = [
-          {
-            class: 'person',
-            confidence: 0.85,
-            x: 0.5,
-            y: 0.5,
-            width: 0.2,
-            height: 0.4,
-            depthScore: 0.2,
-          },
-        ];
+        // On-device YOLO/ZipDepth not available — skip this frame entirely.
+        // DO NOT use fake detectedObjects: a fabricated warning is dangerous for
+        // visually impaired users navigating real environments.
+        addLog('Nav: inference unavailable — frame skipped', 'warn');
+        return;
       }
 
       const warnings = processNavigationFrame(detectedObjects);

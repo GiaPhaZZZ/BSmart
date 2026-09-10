@@ -201,7 +201,10 @@ export class BlePlxService implements IBleService {
    * Reassemble chunked JPEG image packets
    * If single payload: directly emit image
    * If chunked payload: reassemble sequence 0..N-1
+   * Stale buffer (e.g. dropped BLE chunk) is discarded after IMAGE_BUFFER_TIMEOUT_MS.
    */
+  private static readonly IMAGE_BUFFER_TIMEOUT_MS = 5000;
+
   private parseImageChunkPacket(base64Chunk: string): void {
     // If not starting with chunk header, treat as complete base64 image
     if (!base64Chunk.includes(':')) {
@@ -220,12 +223,22 @@ export class BlePlxService implements IBleService {
     const total = parseInt(parts[1], 10);
     const payload = parts.slice(2).join(':');
 
+    // Discard stale buffer if a chunk was dropped (no new seq=0 arrived in time)
+    const now = Date.now();
+    if (
+      this.imageBuffer &&
+      now - this.imageBuffer.timestamp > BlePlxService.IMAGE_BUFFER_TIMEOUT_MS
+    ) {
+      console.warn('[BlePlx] Image buffer timed out (dropped chunk?). Resetting.');
+      this.imageBuffer = null;
+    }
+
     if (seq === 0 || !this.imageBuffer) {
       this.imageBuffer = {
         totalChunks: total,
         receivedCount: 0,
         chunks: new Map(),
-        timestamp: Date.now(),
+        timestamp: now,
       };
     }
 
@@ -242,6 +255,7 @@ export class BlePlxService implements IBleService {
       this.emit(this.imageCallbacks, fullBase64);
     }
   }
+
 
   private setConnectionState(state: BleConnectionState): void {
     this.connectionState = state;

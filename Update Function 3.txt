@@ -1,0 +1,51 @@
+# Function 3 - Map-Guided Autopilot
+
+Function 3 extends Function 2 — Autopilot Guide by adding GPS-based walking navigation and Mapbox API routing.
+
+Instead of only detecting obstacles around the user, Function 3 also allows the user to specify a destination by voice. The system converts the spoken destination into a location, calculates a walking route, tracks the user's position, and provides navigation instructions together with real-time hazard warnings.
+
+The key idea is:
+
+Function 3 = Function 2 (environment / hazard awareness) + Mapbox walking navigation + GPS tracking
+
+Navigation and hazard information are combined into one spoken sentence instead of being played as separate audio clips. Current given code is run on stimulation.
+
+
+
+
+**Run Function3** 
+
+python function3_map.py \
+    --image test/photo/japan.jpeg \
+    --audio test/audio/mo_tinh_nang.mp3 \
+    --lat 10.850555 \
+    --lon 106.81132027777778 \
+    --mapbox-token YOUR_MAPBOX_TOKEN
+
+
+
+The simulation uses:
+
+--image
+    Test camera image
+
+--audio
+    Recorded destination command
+
+--lat
+    Simulated starting latitude
+
+--lon
+    Simulated starting longitude
+
+--mapbox-token
+    Mapbox public/restricted token
+
+--walk-speed
+    Simulated walking speed
+
+--tick-interval
+    GPS simulation update interval
+
+--cycle-interval
+    Combined navigation + hazard announcement interval

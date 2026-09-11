@@ -15,7 +15,7 @@ export const BLE_UUIDS = {
 };
 
 // BLE scan timeout (ms)
-export const BLE_SCAN_TIMEOUT_MS = 10000;
+export const BLE_SCAN_TIMEOUT_MS = 6000;
 
 // Device name prefix to identify BSmart glasses
 export const BLE_DEVICE_NAME_PREFIX = 'BSmart';

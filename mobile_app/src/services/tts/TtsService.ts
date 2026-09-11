@@ -13,8 +13,9 @@
  * See: docs/requirement.md §2.2
  */
 
+import { NativeModules } from 'react-native';
 import Tts from 'react-native-tts';
-import { IBleService } from '../../types';
+import { IBleService, BleConnectionState } from '../../types';
 
 const TTS_LANGUAGE = 'vi-VN';
 const TTS_RATE = 0.5; // Slightly slower than default for clarity
@@ -54,20 +55,43 @@ async function ensureTtsReady(): Promise<void> {
 }
 
 /**
- * Speak text via Android TTS.
- * Plays on phone speaker (MVP).
- * BLE audio forwarding to glasses is BLOCKED pending firmware audio protocol.
+ * Speak text via Android TTS and transmit audio data to glasses over BLE.
+ * Dual-output:
+ *   1. Transmits audio data to ESP32 glasses (AUDIO_OUT GATT characteristic).
+ *   2. Concurrently plays on phone speaker via Android TTS.
  *
  * @param text      Vietnamese text to speak
- * @param bleService  BLE service reference (reserved for future BLE audio pipe)
+ * @param bleService  BLE service reference for streaming data to glasses
  */
 export async function speakViaBle(
   text: string,
-  _bleService: IBleService,
+  bleService?: IBleService,
 ): Promise<void> {
   stopSpeaking();
 
   console.log('[TTS] Speak:', text);
+
+  // 1. Transmit synthesized PCM audio data (Direction B) to glasses via BLE
+  if (bleService && bleService.getConnectionState() === BleConnectionState.CONNECTED) {
+    (async () => {
+      try {
+        const nativeModule = NativeModules?.AudioPlayerModule;
+        if (nativeModule && typeof nativeModule.synthesizeSpeechToPcm === 'function') {
+          const pcmBase64 = await nativeModule.synthesizeSpeechToPcm(text);
+          if (pcmBase64 && pcmBase64.length > 0) {
+            await bleService.sendAudio(pcmBase64);
+            return;
+          }
+        }
+      } catch (synthErr) {
+        console.warn('[TTS] Synthesis to PCM warning, falling back to text payload:', synthErr);
+      }
+      // Fallback: send text command if PCM synthesis unavailable
+      await bleService.sendAudio(text);
+    })().catch(err => {
+      console.warn('[TTS] Failed to stream audio to glasses via BLE:', err);
+    });
+  }
 
   try {
     await ensureTtsReady();
@@ -76,8 +100,17 @@ export async function speakViaBle(
     // Fall through: still attempt to speak, Android may recover
   }
 
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve) => {
     let settled = false;
+
+    // Safety timeout: guarantees the state machine NEVER hangs waiting for TTS
+    const safetyTimeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        resolve();
+      }
+    }, Math.max(3500, text.length * 150));
 
     const onFinish = (event: { utteranceId: string | number }) => {
       if (event.utteranceId !== currentUtteranceId) return;
@@ -92,7 +125,6 @@ export async function speakViaBle(
       if (settled) return;
       settled = true;
       cleanup();
-      // Resolve (not reject) on TTS error to avoid crashing state machine
       console.warn('[TTS] Error during utterance:', event.utteranceId);
       resolve();
     };
@@ -102,30 +134,61 @@ export async function speakViaBle(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error('TTS cancelled'));
+      resolve();
     };
 
+    let subFinish: { remove?: () => void } | null = null;
+    let subError: { remove?: () => void } | null = null;
+    let subCancel: { remove?: () => void } | null = null;
+
     function cleanup() {
-      Tts.removeEventListener('tts-finish', onFinish);
-      Tts.removeEventListener('tts-error', onError);
-      Tts.removeEventListener('tts-cancel', onCancel);
+      clearTimeout(safetyTimeout);
+      try {
+        subFinish?.remove?.();
+      } catch (e) {
+        // ignore
+      }
+      try {
+        subError?.remove?.();
+      } catch (e) {
+        // ignore
+      }
+      try {
+        subCancel?.remove?.();
+      } catch (e) {
+        // ignore
+      }
+      subFinish = null;
+      subError = null;
+      subCancel = null;
       currentCancelRef = null;
       currentUtteranceId = null;
     }
 
-    Tts.addEventListener('tts-finish', onFinish);
-    Tts.addEventListener('tts-error', onError);
-    Tts.addEventListener('tts-cancel', onCancel);
+    try {
+      subFinish = Tts.addEventListener('tts-finish', onFinish) as any;
+      subError = Tts.addEventListener('tts-error', onError) as any;
+      subCancel = Tts.addEventListener('tts-cancel', onCancel) as any;
+    } catch (e) {
+      console.warn('[TTS] addEventListener error:', e);
+    }
 
-    currentUtteranceId = Tts.speak(text);
+    try {
+      currentUtteranceId = Tts.speak(text);
+    } catch (speakErr) {
+      console.warn('[TTS] Tts.speak error:', speakErr);
+      cleanup();
+      resolve();
+      return;
+    }
 
     // Store cancel hook for stopSpeaking()
     currentCancelRef = () => {
       if (!settled) {
         settled = true;
         cleanup();
-        Tts.stop();
-        reject(new Error('TTS cancelled'));
+        Tts.stop().catch(() => {});
+        resolve();
       }
     };
   });

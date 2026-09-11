@@ -34,6 +34,7 @@ export function MainScreen() {
   const {
     appState,
     connectionState,
+    connectedDeviceName,
     logs,
     isMockBle,
     toggleMockBle,
@@ -97,6 +98,7 @@ export function MainScreen() {
         {/* Bluetooth Connection Status */}
         <ConnectionIndicator
           state={connectionState}
+          deviceName={connectedDeviceName}
           onConnect={onConnect}
           onDisconnect={onDisconnect}
         />

@@ -4,6 +4,7 @@
  * See: docs/requirement.md §2.1 & §12
  */
 
+import { Linking, Platform } from 'react-native';
 import { BleManager, Device, Subscription } from 'react-native-ble-plx';
 import {
   BleConnectionState,
@@ -15,6 +16,7 @@ import {
   BLE_SCAN_TIMEOUT_MS,
   BLE_DEVICE_NAME_PREFIX,
 } from '../../constants/bleUuids';
+import { stringToBase64 } from '../audio/audioUtils';
 
 type ButtonCallback = (event: BleEvent) => void;
 type ImageCallback = (imageBase64: string) => void;
@@ -43,9 +45,80 @@ export class BlePlxService implements IBleService {
 
   constructor() {
     this.manager = new BleManager();
+    this.initBluetoothStateListener();
+  }
+
+  private initBluetoothStateListener(): void {
+    try {
+      if (typeof this.manager?.onStateChange === 'function') {
+        this.manager.onStateChange(state => {
+          if (state === 'PoweredOff') {
+            this.setConnectionState(BleConnectionState.BLUETOOTH_OFF);
+          } else if (state === 'PoweredOn') {
+            if (this.connectionState === BleConnectionState.BLUETOOTH_OFF) {
+              this.setConnectionState(BleConnectionState.DISCONNECTED);
+            }
+          }
+        }, true);
+      }
+    } catch (e) {
+      console.warn('[BlePlxService] Error initializing Bluetooth state listener:', e);
+    }
+  }
+
+  async isBluetoothEnabled(): Promise<boolean> {
+    try {
+      const state = await this.manager.state();
+      return state === 'PoweredOn';
+    } catch {
+      return false;
+    }
+  }
+
+  async enableBluetooth(): Promise<boolean> {
+    try {
+      if (Platform.OS === 'android') {
+        // Race manager.enable() with a 1500ms timeout.
+        // On Android 12+, react-native-ble-plx's enable() lacks Activity context
+        // and hangs waiting indefinitely for adapter state without launching the prompt.
+        let enabledViaManager = false;
+        try {
+          const enablePromise = this.manager.enable().then(() => true).catch(() => false);
+          const timeoutPromise = new Promise<boolean>(resolve =>
+            setTimeout(() => resolve(false), 1500),
+          );
+          enabledViaManager = await Promise.race([enablePromise, timeoutPromise]);
+        } catch {
+          enabledViaManager = false;
+        }
+
+        if (enabledViaManager) {
+          return true;
+        }
+
+        // Direct fallback: Open Android Bluetooth Settings for instant 1-tap toggle
+        try {
+          await Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS');
+          return true;
+        } catch {
+          await Linking.openSettings();
+          return true;
+        }
+      }
+      return false;
+    } catch (err) {
+      console.warn('[BlePlxService] Could not enable Bluetooth:', err);
+      return false;
+    }
   }
 
   async connect(): Promise<void> {
+    const isEnabled = await this.isBluetoothEnabled();
+    if (!isEnabled) {
+      this.setConnectionState(BleConnectionState.BLUETOOTH_OFF);
+      throw new Error('Bluetooth trên điện thoại đang tắt. Vui lòng bật Bluetooth.');
+    }
+
     this.setConnectionState(BleConnectionState.CONNECTING);
 
     return new Promise((resolve, reject) => {
@@ -101,17 +174,24 @@ export class BlePlxService implements IBleService {
     this.setConnectionState(BleConnectionState.DISCONNECTED);
   }
 
-  async sendAudio(audioBase64: string): Promise<void> {
+  async sendAudio(audioData: string): Promise<void> {
     if (!this.device) {
       throw new Error('BLE not connected');
     }
 
-    // Chunk audio payload into MTU-friendly sizes (~180 bytes per chunk)
-    const chunkSize = 180;
-    const totalChunks = Math.ceil(audioBase64.length / chunkSize);
+    // Ensure payload is encoded as base64 string for react-native-ble-plx
+    const isBase64 =
+      audioData.length > 0 &&
+      audioData.length % 4 === 0 &&
+      /^[A-Za-z0-9+/=]+$/.test(audioData.trim());
+    const base64Payload = isBase64 ? audioData : stringToBase64(audioData);
+
+    // Chunk audio payload into MTU-friendly sizes (~160 chars Base64 = 120 bytes = 60 16-bit PCM samples)
+    const chunkSize = 160;
+    const totalChunks = Math.ceil(base64Payload.length / chunkSize);
 
     for (let i = 0; i < totalChunks; i++) {
-      const chunkPayload = audioBase64.slice(i * chunkSize, (i + 1) * chunkSize);
+      const chunkPayload = base64Payload.slice(i * chunkSize, (i + 1) * chunkSize);
       await this.device.writeCharacteristicWithResponseForService(
         BLE_UUIDS.SERVICE_UUID,
         BLE_UUIDS.AUDIO_OUT_CHARACTERISTIC_UUID,
@@ -143,6 +223,11 @@ export class BlePlxService implements IBleService {
 
   getConnectionState(): BleConnectionState {
     return this.connectionState;
+  }
+
+  getConnectedDeviceName(): string | null {
+    if (this.connectionState !== BleConnectionState.CONNECTED) return null;
+    return this.device?.name || this.device?.localName || 'BSmart Glasses';
   }
 
   private setupMonitors(): void {
@@ -206,13 +291,11 @@ export class BlePlxService implements IBleService {
   private static readonly IMAGE_BUFFER_TIMEOUT_MS = 5000;
 
   private parseImageChunkPacket(base64Chunk: string): void {
-    // If not starting with chunk header, treat as complete base64 image
     if (!base64Chunk.includes(':')) {
       this.emit(this.imageCallbacks, base64Chunk);
       return;
     }
 
-    // Header protocol format: "seq:total:payload_base64"
     const parts = base64Chunk.split(':');
     if (parts.length < 3) {
       this.emit(this.imageCallbacks, base64Chunk);
@@ -223,13 +306,22 @@ export class BlePlxService implements IBleService {
     const total = parseInt(parts[1], 10);
     const payload = parts.slice(2).join(':');
 
-    // Discard stale buffer if a chunk was dropped (no new seq=0 arrived in time)
     const now = Date.now();
     if (
       this.imageBuffer &&
       now - this.imageBuffer.timestamp > BlePlxService.IMAGE_BUFFER_TIMEOUT_MS
     ) {
-      console.warn('[BlePlx] Image buffer timed out (dropped chunk?). Resetting.');
+      // Error concealment: If we have at least 80% of chunks, try to decode it anyway
+      if (this.imageBuffer.chunks.size > this.imageBuffer.totalChunks * 0.8) {
+        console.warn('[BlePlx] Image buffer timed out, but emitting partial frame.');
+        let fullBase64 = '';
+        for (let i = 0; i < this.imageBuffer.totalChunks; i++) {
+          fullBase64 += this.imageBuffer.chunks.get(i) ?? '';
+        }
+        this.emit(this.imageCallbacks, fullBase64);
+      } else {
+        console.warn('[BlePlx] Image buffer timed out (dropped chunks). Resetting.');
+      }
       this.imageBuffer = null;
     }
 
@@ -245,8 +337,8 @@ export class BlePlxService implements IBleService {
     this.imageBuffer.chunks.set(seq, payload);
     this.imageBuffer.receivedCount++;
 
-    // Check if image complete
-    if (this.imageBuffer.chunks.size === total) {
+    // Check if image complete or mostly complete
+    if (this.imageBuffer.chunks.size >= total) {
       let fullBase64 = '';
       for (let i = 0; i < total; i++) {
         fullBase64 += this.imageBuffer.chunks.get(i) ?? '';

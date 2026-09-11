@@ -12,7 +12,9 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-os.environ.setdefault("HF_HOME", str(BASE_DIR / ".cache" / "huggingface"))
+REPO_ROOT = BASE_DIR.parent.parent
+MODELS_DIR = REPO_ROOT / "models"
+os.environ.setdefault("HF_HOME", str(REPO_ROOT / ".cache" / "huggingface"))
 
 ok, fail = [], []
 
@@ -48,7 +50,7 @@ check("import: piper", _piper)
 
 # --- ZipDepth ---------------------------------------------------------
 def _zipdepth():
-    base = BASE_DIR / "ZipDepth"
+    base = MODELS_DIR / "ZipDepth" if (MODELS_DIR / "ZipDepth").exists() else (REPO_ROOT / "ZipDepth")
     ckpts = list((base / "checkpoints").glob("*.pth"))
     assert ckpts, f"no .pth checkpoints found in {base / 'checkpoints'}"
 
@@ -58,7 +60,11 @@ def _zipdepth():
     # fail the whole check just because that package isn't on the path —
     # fall back to confirming the script-based layout is present instead.
     try:
-        import zipdepth  # noqa: F401
+        import sys
+        import importlib
+        if str(base) not in sys.path:
+            sys.path.insert(0, str(base))
+        importlib.import_module("zipdepth")
     except ImportError:
         infer_script = base / "scripts" / "infer.py"
         assert infer_script.exists(), (
@@ -70,7 +76,7 @@ check("ZipDepth (repo layout + checkpoints)", _zipdepth)
 # --- YOLO26 -------------------------------------------------------------
 def _yolo():
     from ultralytics import YOLO
-    p = BASE_DIR / "yolo26s.pt"
+    p = MODELS_DIR / "yolo26s.pt" if (MODELS_DIR / "yolo26s.pt").exists() else (REPO_ROOT / "yolo26s.pt")
     assert p.exists(), f"{p} not found — run download_models.py"
     YOLO(str(p))  # loads the weights, not just checks the file exists
 
@@ -145,7 +151,9 @@ check("SmolVLM2-256M-Video loads", _smolvlm2)
 # --- Piper voice ----------------------------------------------------------
 def _piper_voice():
     from piper import PiperVoice
-    onnx = BASE_DIR / "voices" / "vi_VN-vais1000-medium.onnx"
+    onnx = MODELS_DIR / "voices" / "vi_VN-vais1000-medium.onnx"
+    if not onnx.exists():
+        onnx = REPO_ROOT / "voices" / "vi_VN-vais1000-medium.onnx"
     cfg = onnx.with_suffix(onnx.suffix + ".json")  # vi_VN-...onnx.json
     assert onnx.exists(), f"{onnx} not found"
     assert cfg.exists(), f"{cfg} not found (PiperVoice.load needs the matching .onnx.json config)"

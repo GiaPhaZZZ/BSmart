@@ -15,6 +15,7 @@ export enum BleConnectionState {
   DISCONNECTED = 'Disconnected',
   CONNECTING = 'Connecting',
   CONNECTED = 'Connected',
+  BLUETOOTH_OFF = 'BluetoothOff',
 }
 
 export interface BleEvent {
@@ -68,4 +69,7 @@ export interface IBleService {
     callback: (state: BleConnectionState) => void,
   ): () => void;
   getConnectionState(): BleConnectionState;
+  getConnectedDeviceName?(): string | null;
+  enableBluetooth?(): Promise<boolean>;
+  isBluetoothEnabled?(): Promise<boolean>;
 }

@@ -16,6 +16,7 @@ import {
   PanResponderGestureState,
   StyleSheet,
   Text,
+  Vibration,
   View,
 } from 'react-native';
 import { AppState } from '../types';
@@ -53,9 +54,12 @@ export function BlindTouchArea({
           return;
         }
 
-        // Trigger Hold after 250ms of holding
+        // Trigger Hold after 250ms of holding with tactile haptic feedback
         holdTimer.current = setTimeout(() => {
           isHolding.current = true;
+          try {
+            Vibration.vibrate(60);
+          } catch {}
           onHold();
         }, 250);
       },
@@ -121,7 +125,20 @@ export function BlindTouchArea({
       accessible={true}
       accessibilityRole="button"
       accessibilityLabel={`Màn hình tương tác người khiếm thị. Trạng thái hiện tại: ${appState}. Chạm và giữ bất kỳ đâu để nói lệnh. Thả tay ra để gửi. Chạm nhanh một lần hoặc hai ngón tay để hủy và về trang chủ.`}
-      accessibilityHint="Nhấn giữ để nói chuyện với kính AI hoặc chạm nhanh để trở về màn hình chính."
+      accessibilityActions={[
+        { name: 'activate', label: 'Bắt đầu nói lệnh' },
+        { name: 'escape', label: 'Hủy hoặc về trang chủ' },
+      ]}
+      onAccessibilityAction={event => {
+        if (event.nativeEvent.actionName === 'activate') {
+          try {
+            Vibration.vibrate(60);
+          } catch {}
+          onHold();
+        } else if (event.nativeEvent.actionName === 'escape') {
+          onShortPress();
+        }
+      }}
       style={[
         styles.container,
         {
@@ -139,8 +156,8 @@ export function BlindTouchArea({
               backgroundColor: isListening
                 ? '#FF1744'
                 : isProcessing
-                ? '#FFA000'
-                : '#0288D1',
+                  ? '#FFA000'
+                  : '#0288D1',
             },
           ]}
         >
@@ -159,7 +176,7 @@ export function BlindTouchArea({
             • Thả tay: Gửi lệnh đến kính
           </Text>
           <Text style={styles.helpText}>
-            • Chạm 1 lần hoặc 2 ngón: Hủy lệnh khẩn cấp
+            • Chạm 2 lần: Hủy lệnh khẩn cấp
           </Text>
         </View>
       </View>

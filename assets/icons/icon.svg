@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Minimal AI Vision Icon</title>
+  <desc>Refined dark rounded-square icon with a tilted frame and enlarged central sensor symbol.</desc>
+
+  <!-- Outer app tile -->
+  <rect x="48" y="48" width="928" height="928" rx="250" fill="#091426"/>
+
+  <!-- Subtle offset frame -->
+  <g transform="translate(512 512) rotate(0)">
+    <rect x="-238" y="-238" width="476" height="476" rx="86"
+          fill="#10203A" stroke="#234674" stroke-width="16"/>
+  </g>
+
+  <!-- Main tilted frame -->
+  <g transform="translate(512 512) rotate(-13)">
+    <rect x="-246" y="-246" width="492" height="492" rx="78"
+          fill="#101F38" stroke="#F7F7F8" stroke-width="18"/>
+  </g>
+
+  <!-- Central minimal sensor / vision mark -->
+  <g transform="translate(512 512)" stroke-linecap="round">
+    <!-- outer cyan signal bars -->
+    <path d="M-108 -38 V38" stroke="#38B8F2" stroke-width="18"/>
+    <path d="M108 -38 V38" stroke="#38B8F2" stroke-width="18"/>
+
+    <!-- inner cyan signal bars -->
+    <path d="M-50 -76 V76" stroke="#38B8F2" stroke-width="18"/>
+    <path d="M50 -76 V76" stroke="#38B8F2" stroke-width="18"/>
+
+    <!-- central white sensor bar -->
+    <path d="M0 -92 V92" stroke="#F7F7F8" stroke-width="18"/>
+  </g>
+</svg>

@@ -122,10 +122,86 @@ class AudioPlayerModule(private val reactContext: ReactApplicationContext) :
                 else -> android.media.ToneGenerator.TONE_PROP_BEEP
             }
             toneGenerator.startTone(tone, 150)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    toneGenerator.release()
+                } catch (ignored: Exception) {}
+            }, 250)
             promise.resolve(true)
         } catch (e: Exception) {
             android.util.Log.e("AudioPlayerModule", "Failed to play beep tone: $toneType", e)
             promise.reject("ERR_BEEP", e.message, e)
+        }
+    }
+
+    private var nativeTts: android.speech.tts.TextToSpeech? = null
+    private var ttsReady = false
+
+    @ReactMethod
+    fun synthesizeSpeechToPcm(text: String, promise: Promise) {
+        if (text.isBlank()) {
+            promise.resolve("")
+            return
+        }
+
+        val runSynth = {
+            try {
+                val tempFile = java.io.File(reactContext.cacheDir, "tts_out_${System.currentTimeMillis()}.wav")
+                val utteranceId = "synth_${System.currentTimeMillis()}"
+
+                nativeTts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                    override fun onStart(id: String?) {}
+
+                    override fun onDone(id: String?) {
+                        if (id == utteranceId && tempFile.exists()) {
+                            try {
+                                val bytes = tempFile.readBytes()
+                                tempFile.delete()
+                                // Skip 44-byte WAV header if present to get pure PCM samples
+                                val pcmBytes = if (bytes.size > 44 && bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte()) {
+                                    bytes.copyOfRange(44, bytes.size)
+                                } else {
+                                    bytes
+                                }
+                                val base64 = android.util.Base64.encodeToString(pcmBytes, android.util.Base64.NO_WRAP)
+                                promise.resolve(base64)
+                            } catch (e: Exception) {
+                                promise.reject("ERR_READ", e.message)
+                            }
+                        }
+                    }
+
+                    override fun onError(id: String?) {
+                        if (id == utteranceId) {
+                            tempFile.delete()
+                            promise.reject("ERR_SYNTH", "TTS synthesis failed")
+                        }
+                    }
+                })
+
+                val params = android.os.Bundle()
+                val result = nativeTts?.synthesizeToFile(text, params, tempFile, utteranceId)
+                if (result != android.speech.tts.TextToSpeech.SUCCESS) {
+                    tempFile.delete()
+                    promise.reject("ERR_SYNTH_START", "Failed to start TTS synthesis to file")
+                }
+            } catch (e: Exception) {
+                promise.reject("ERR_SYNTH_EXCEPTION", e.message)
+            }
+        }
+
+        if (nativeTts == null || !ttsReady) {
+            nativeTts = android.speech.tts.TextToSpeech(reactContext) { status ->
+                if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                    nativeTts?.language = java.util.Locale("vi", "VN")
+                    ttsReady = true
+                    runSynth()
+                } else {
+                    promise.reject("ERR_TTS_INIT", "Native TTS init failed")
+                }
+            }
+        } else {
+            runSynth()
         }
     }
 
@@ -140,6 +216,19 @@ class AudioPlayerModule(private val reactContext: ReactApplicationContext) :
                 Log.w("AudioPlayerModule", "Error releasing player", e)
             }
             mediaPlayer = null
+        }
+    }
+
+    override fun onCatalystInstanceDestroy() {
+        super.onCatalystInstanceDestroy()
+        releasePlayer()
+        try {
+            nativeTts?.stop()
+            nativeTts?.shutdown()
+            nativeTts = null
+            ttsReady = false
+        } catch (e: Exception) {
+            Log.w("AudioPlayerModule", "Error shutting down native TTS", e)
         }
     }
 }

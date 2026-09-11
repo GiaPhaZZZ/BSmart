@@ -16,6 +16,7 @@ ENV/
 *.bin
 *.tar.gz
 *.zip
+models/
 voices/
 exported_models/
 ai_core/exported_models/
@@ -24,9 +25,11 @@ envit5-ct2-int8/
 .cache/
 *.wav
 *.mp3
-!activate_voice/*.mp3
+!assets/audio/*.mp3
 !mobile_app/android/app/src/main/res/raw/*.mp3
 out*.wav
+release/
+.agents/
 
 # ==========================================
 # React Native & Node

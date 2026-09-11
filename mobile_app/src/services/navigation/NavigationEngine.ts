@@ -112,7 +112,19 @@ export function processNavigationFrame(
  * Template: "Lưu ý, có {class} ở {vị trí}, {gần/xa}"
  */
 export function warningsToVietnamese(warnings: NavigationWarning[]): string {
-  if (warnings.length === 0) return '';
+  const now = Date.now();
+  if (warnings.length === 0) {
+    const lastClear = cooldownMap.get('CLEAR_PATH') || 0;
+    // Báo đường trống mỗi 10 giây (nếu không có vật cản nào)
+    if (now - lastClear > 10000) {
+      cooldownMap.set('CLEAR_PATH', now);
+      return 'Đường phía trước trống, tiếp tục di chuyển.';
+    }
+    return '';
+  }
+
+  // Nếu có vật cản thì reset cooldown đường trống để lần sau báo lại ngay nếu hết vật cản
+  cooldownMap.delete('CLEAR_PATH');
 
   const parts = warnings.map(w => {
     const className = CLASS_NAME_VI[w.objectClass] ?? w.objectClass;
@@ -120,7 +132,7 @@ export function warningsToVietnamese(warnings: NavigationWarning[]): string {
     return `có ${className} ở ${positionText}, ${w.distance.toLowerCase()}`;
   });
 
-  return `Lưu ý, ${parts.join('; ')}`;
+  return `Chú ý, ${parts.join('; ')}`;
 }
 
 /**
@@ -129,3 +141,4 @@ export function warningsToVietnamese(warnings: NavigationWarning[]): string {
 export function resetCooldowns(): void {
   cooldownMap.clear();
 }
+

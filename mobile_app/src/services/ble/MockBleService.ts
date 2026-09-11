@@ -46,6 +46,15 @@ export class MockBleService implements IBleService {
     // In mock: simulate glasses receiving audio (no-op)
   }
 
+  async isBluetoothEnabled(): Promise<boolean> {
+    return true;
+  }
+
+  async enableBluetooth(): Promise<boolean> {
+    this.setConnectionState(BleConnectionState.DISCONNECTED);
+    return true;
+  }
+
   onButtonEvent(callback: ButtonCallback): () => void {
     this.buttonCallbacks.add(callback);
     return () => this.buttonCallbacks.delete(callback);
@@ -70,6 +79,11 @@ export class MockBleService implements IBleService {
 
   getConnectionState(): BleConnectionState {
     return this.connectionState;
+  }
+
+  getConnectedDeviceName(): string | null {
+    if (this.connectionState !== BleConnectionState.CONNECTED) return null;
+    return 'BSmart Glasses (Giả lập)';
   }
 
   // --- Mock-only simulation helpers ---

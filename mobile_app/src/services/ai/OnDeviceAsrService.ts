@@ -30,7 +30,7 @@ export function normalizeVietnameseText(str: string): string {
 }
 
 /**
- * Spot keyword from transcribed Vietnamese text.
+ * Spot keyword from transcribed Vietnamese text using flexible Regex.
  * Matches:
  *   - "tính năng 1" / "tính năng một" / "gpt" -> FEATURE_1_QA
  *   - "tính năng 2" / "tính năng hai"         -> FEATURE_2_CAPTURE
@@ -39,34 +39,24 @@ export function normalizeVietnameseText(str: string): string {
 export function matchVoiceCommand(rawText: string): AppState | null {
   const norm = normalizeVietnameseText(rawText);
 
-  if (
-    norm.includes('tinh nang 1') ||
-    norm.includes('tinh nang mot') ||
-    norm.includes('gpt') ||
-    norm.includes('hoi dap')
-  ) {
+  if (/tinh nang (1|mot)|chuc nang (1|mot)|so (1|mot)|hoi dap|gpt/i.test(norm)) {
     return AppState.FEATURE_1_QA;
   }
 
-  if (
-    norm.includes('tinh nang 2') ||
-    norm.includes('tinh nang hai') ||
-    norm.includes('chup anh')
-  ) {
+  if (/tinh nang (2|hai|hay)|chuc nang (2|hai|hay)|so (2|hai|hay)|chup anh/i.test(norm)) {
     return AppState.FEATURE_2_CAPTURE;
   }
 
-  if (
-    norm.includes('tinh nang 3') ||
-    norm.includes('tinh nang ba') ||
-    norm.includes('dan duong') ||
-    norm.includes('vat can')
-  ) {
+  if (/tinh nang (3|ba)|chuc nang (3|ba)|so (3|ba)|dan duong|vat can/i.test(norm)) {
     return AppState.FEATURE_3_NAVIGATION;
   }
 
   return null;
 }
+
+import { NativeModules, Platform } from 'react-native';
+
+const { OnnxInferenceModule } = NativeModules;
 
 /**
  * Transcribe audio on-device using PhoWhisper pipeline.
@@ -86,9 +76,23 @@ export async function transcribeAudioOnDevice(
     };
   }
 
-  // On-device PhoWhisper ONNX pipeline not yet wired to Native module.
-  // Return empty result so the caller falls back gracefully (TTS: "Không nhận diện được lệnh").
-  // DO NOT hardcode a fake command here — that causes silent mis-routing in production.
+  if (Platform.OS === 'android' && OnnxInferenceModule?.runSpeechRecognition) {
+    try {
+      const result = await OnnxInferenceModule.runSpeechRecognition(audioBase64);
+      if (result && result.text) {
+        const cleanText = result.text.trim();
+        const matched = matchVoiceCommand(cleanText);
+        return {
+          text: cleanText,
+          matchedState: matched,
+          confidence: result.confidence || 0.95,
+        };
+      }
+    } catch (err) {
+      console.warn('[ASR] On-device PhoWhisper execution failed:', err);
+    }
+  }
+
   console.warn('[ASR] On-device PhoWhisper not available. Returning empty transcript.');
   return {
     text: '',

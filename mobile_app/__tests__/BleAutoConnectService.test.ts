@@ -70,6 +70,8 @@ describe('BleAutoConnectService Unit Tests', () => {
     autoConnect.start();
 
     if (connectionCallback) {
+      connectionCallback(BleConnectionState.CONNECTED);
+      (Vibration.vibrate as jest.Mock).mockClear();
       connectionCallback(BleConnectionState.DISCONNECTED);
     }
 

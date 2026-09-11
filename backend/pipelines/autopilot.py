@@ -71,8 +71,10 @@ def _ensure_zipdepth_importable():
     except ImportError:
         pass
     candidates = [
-        Path(__file__).resolve().parent / "ZipDepth",  # pipeline.py next to ZipDepth/
-        Path.cwd() / "ZipDepth",                        # or run from one level up
+        Path(__file__).resolve().parent.parent.parent / "models" / "ZipDepth",
+        Path(__file__).resolve().parent / "ZipDepth",
+        Path.cwd() / "models" / "ZipDepth",
+        Path.cwd() / "ZipDepth",
     ]
     for c in candidates:
         if (c / "zipdepth" / "__init__.py").exists():
@@ -82,12 +84,25 @@ def _ensure_zipdepth_importable():
         "Could not find the ZipDepth repo (looked for a 'zipdepth' package "
         f"under: {', '.join(str(c) for c in candidates)}). Either run "
         "`pip install -e ZipDepth` inside your glass venv, or make sure the "
-        "ZipDepth/ folder sits next to pipeline.py."
+        "ZipDepth/ folder sits under models/ or next to pipeline."
     )
 
 
 _ensure_zipdepth_importable()
 from zipdepth.inference.predictor import DepthInference
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+MODELS_DIR = REPO_ROOT / "models"
+
+
+def _resolve_model(rel: str) -> str:
+    p_models = MODELS_DIR / rel
+    if p_models.exists():
+        return str(p_models)
+    p_root = REPO_ROOT / rel
+    if p_root.exists():
+        return str(p_root)
+    return str(p_models)
 
 
 # ============================================================================
@@ -100,12 +115,12 @@ CONFIG = {
     # DETECTOR (YOLO26s -- object detection only, no depth head anymore)
     # ------------------------------------------------------------------
     "detector_conf": 0.35,
-    "detector_model_path": "yolo26s.pt",
+    "detector_model_path": _resolve_model("yolo26s.pt"),
 
     # ------------------------------------------------------------------
     # DEPTH (ZipDepth -- separate, real monocular depth model)
     # ------------------------------------------------------------------
-    "zipdepth_checkpoint": "ZipDepth/checkpoints/zipdepth_base_npu.pth",
+    "zipdepth_checkpoint": _resolve_model("ZipDepth/checkpoints/zipdepth_base_npu.pth"),
     "zipdepth_variant": "base",           # must match the checkpoint
     "zipdepth_input_size": 384,           # ZipDepth's own default; raise for accuracy, lower for speed
     "zipdepth_ensure_multiple_of": 32,
@@ -240,7 +255,7 @@ CONFIG = {
     # ------------------------------------------------------------------
     "max_speech_queue_s": 6.0,
     "tts_chars_per_second": 14.0,
-    "piper_voice_path": "voices/vi_VN-vais1000-medium.onnx",  # from your download_models.py step
+    "piper_voice_path": _resolve_model("voices/vi_VN-vais1000-medium.onnx"),  # from your download_models.py step
 }
 
 

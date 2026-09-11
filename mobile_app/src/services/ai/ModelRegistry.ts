@@ -38,7 +38,7 @@ const DEFAULT_MODELS: Record<string, ModelInfo> = {
     task: 'asr',
     filename: 'phowhisper/phowhisper_encoder.onnx',
     inputShape: [1, 80, 3000],
-    status: 'UNINITIALIZED', // Set to READY only after Native module confirms model loaded
+    status: 'UNINITIALIZED', // Set to READY at app runtime once native module available
     description: 'Vietnamese Speech-to-Text for voice control and queries',
   },
   smolvlm2: {
@@ -47,7 +47,7 @@ const DEFAULT_MODELS: Record<string, ModelInfo> = {
     task: 'vlm',
     filename: 'smolvlm2/smolvlm2_vision.onnx',
     inputShape: [1, 3, 384, 384],
-    status: 'UNINITIALIZED', // Set to READY only after Native module confirms model loaded
+    status: 'UNINITIALIZED', // Set to READY at app runtime once native module available
     description: 'Multimodal Vision-Language model for Scene QA',
   },
   yolo26s: {
@@ -56,7 +56,7 @@ const DEFAULT_MODELS: Record<string, ModelInfo> = {
     task: 'detection',
     filename: 'navigation/yolo26s.onnx',
     inputShape: [1, 3, 640, 640],
-    status: 'UNINITIALIZED', // Set to READY only after Native module confirms model loaded
+    status: 'UNINITIALIZED', // Set to READY at app runtime once native module available
     description: 'Real-time obstacle and person detector',
   },
   zipdepth: {
@@ -65,7 +65,7 @@ const DEFAULT_MODELS: Record<string, ModelInfo> = {
     task: 'depth',
     filename: 'navigation/zipdepth.onnx',
     inputShape: [1, 3, 384, 384],
-    status: 'UNINITIALIZED', // Set to READY only after Native module confirms model loaded
+    status: 'UNINITIALIZED', // Set to READY at app runtime once native module available
     description: 'Monocular relative inverse depth estimator',
   },
 };

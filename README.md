@@ -20,29 +20,33 @@ A lightweight, high-performance multimodal AI system designed for smart glasses 
 
 ```text
 BSmart/
-├── Function0_voice_control.py   # Voice command recognition & activation
-├── Function1_chatbot.py         # Visual QA multimodal chatbot pipeline
-├── Funtion2_autopilot.py        # Autopilot obstacle detection & depth guidance
-├── server.py                    # FastAPI REST server for Mobile App integration
-├── download_models.py           # Pretrained AI models downloader
-├── check_glass.py               # 11/11 Sanity & inference verifier
-├── start_backend.bat            # One-click Windows backend server startup
-│
-├── ai_core/                     # ONNX model export & packaging scripts
-│   ├── export_phowhisper_onnx.py
-│   ├── export_smolvlm2_onnx.py
-│   ├── export_yolo_zipdepth_onnx.py
-│   └── package_models.py
+├── backend/                     # Python FastAPI Backend & AI Pipelines
+│   ├── server.py                # FastAPI REST server for Mobile App integration
+│   ├── pipelines/               # Core multimodal processing pipelines
+│   │   ├── voice_control.py     # Voice command recognition & activation
+│   │   ├── visual_qa.py         # Visual QA multimodal chatbot pipeline
+│   │   └── autopilot.py         # Autopilot obstacle detection & depth guidance
+│   ├── scripts/                 # Utility, setup & diagnostic scripts
+│   │   ├── check_glass.py       # 11/11 Sanity & inference verifier
+│   │   ├── download_models.py   # Pretrained AI models downloader
+│   │   ├── setup_glass.sh
+│   │   ├── start_backend.bat
+│   │   └── start_backend.sh
+│   └── requirements.txt         # Python dependencies
 │
 ├── mobile_app/                  # React Native mobile application
 │   ├── android/                 # Android project with ONNX Runtime Native
-│   ├── src/                     # React Native UI & On-Device inference modules
-│   └── App.tsx
+│   ├── src/                     # UI components, state machine & inference services
+│   └── scripts/                 # Icon generation & dependency patches
 │
-├── firmware/                    # Smart Glasses ESP32 hardware code
-├── ZipDepth/                    # Monocular depth estimation repository & checkpoints
-├── voices/                      # Piper TTS Vietnamese voice assets (.onnx)
-└── test/                        # Test photos & audio clips
+├── firmware/                    # Smart Glasses ESP32-S3 hardware code
+├── ai_core/                     # ONNX model export & packaging scripts
+├── models/                      # Pretrained weights & model checkpoints (Git Ignored)
+├── assets/                      # App icons (icon.svg) & sound clips (Open_f1..f4.mp3)
+├── release/                     # Packaged standalone APK outputs (BSmart.apk)
+├── docs/                        # Architecture & documentation
+├── test/                        # Test photos & audio clips
+└── start_backend.bat            # One-click Windows backend server startup
 ```
 
 ---
@@ -62,23 +66,23 @@ source ./glass/bin/activate  # or ./glass/glass/bin/activate
 ### 2. Download Pretrained Models
 Download all required baseline weights (`yolo26s.pt`, `PhoWhisper`, `EnViT5`, `SmolVLM2`, `Piper vi_VN`):
 ```bash
-python download_models.py
+python backend/scripts/download_models.py
 ```
 
 ### 3. INT8 Model Optimization (Must-Do for CPU Speed)
 Convert speech & translation models to CTranslate2 INT8 format for real-time CPU performance:
 ```bash
 # Convert PhoWhisper ASR
-ct2-transformers-converter --model vinai/PhoWhisper-tiny --output_dir phowhisper-ct2-int8 --quantization int8
+ct2-transformers-converter --model vinai/PhoWhisper-tiny --output_dir models/phowhisper-ct2-int8 --quantization int8
 
 # Convert EnViT5 Translation
-ct2-transformers-converter --model VietAI/envit5-translation --output_dir envit5-ct2-int8 --quantization int8
+ct2-transformers-converter --model VietAI/envit5-translation --output_dir models/envit5-ct2-int8 --quantization int8
 ```
 
 ### 4. Verify System Readiness (11/11 Sanity Check)
 Run the diagnostic script to verify that all libraries and models load correctly:
 ```bash
-python check_glass.py
+python backend/scripts/check_glass.py
 ```
 *Expected Output: `11/11 checks passed` with no errors.*
 
@@ -93,7 +97,7 @@ Start the backend server to serve the Mobile App and Smart Glasses:
 start_backend.bat
 
 # On Linux / WSL / Terminal
-python server.py
+python backend/server.py
 ```
 *Server runs at: `http://0.0.0.0:8000`*
 
@@ -167,15 +171,27 @@ npx react-native build-android --mode=release
 
 ---
 
+## 🔌 ESP32-S3 Firmware Flashing
+
+BSmart includes a one-click flashing script that automatically detects the ESP32-S3 COM port and flashes the release binaries (`bootloader.bin`, `partitions.bin`, and `firmware.bin`).
+
+```bash
+# Make sure the ESP32 is connected via USB, then run at project folder:
+python flash_firmware.py
+```
+*Note: The script automatically installs required dependencies (`esptool`, `pyserial`) if they are missing.*
+
+---
+
 ## 🧪 CLI Feature Execution Examples
 
 ```bash
 # Function 0: Voice Command Test
-python Function0_voice_control.py --audio test/audio/mo_tinh_nang.mp3
+python backend/pipelines/voice_control.py --audio test/audio/mo_tinh_nang.mp3
 
 # Function 1: Visual QA Chatbot Test
-python Function1_chatbot.py --image test/photo/road.jpg --audio test/audio/mieu_ta_khung_canh.mp3 --out out.wav
+python backend/pipelines/visual_qa.py --image test/photo/road.jpg --audio test/audio/mieu_ta_khung_canh.mp3 --out out.wav
 
 # Function 2: Autopilot Navigation Test
-python Funtion2_autopilot.py --image test/photo/road.jpg --audio guide.wav
+python backend/pipelines/autopilot.py --image test/photo/road.jpg --audio guide.wav
 ```

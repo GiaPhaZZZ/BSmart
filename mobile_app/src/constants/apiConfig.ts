@@ -1,9 +1,13 @@
 /**
  * BSmart Constants: API Configuration
- * Set API_BASE_URL via environment or update this file to point to your server.
+ * 
+ * Ứng dụng hiện tại đã chuyển sang kiến trúc 100% Standalone (Offline-first).
+ * Tính năng Navigation (Feature 3) dùng trực tiếp Mapbox SDK và AI inference on-device.
+ * 
+ * Các tính năng ASR/VLM cũ (Feature 1/2) qua BLE vẫn có fallback gọi API backend nếu 
+ * chưa có module ONNX native. Ở đây giữ lại API_BASE_URL để code không lỗi.
  */
 
-// Self-hosted AI backend — change IP/port to match your deployment
 export const API_BASE_URL = 'http://192.168.1.100:8000';
 
 export const API_ENDPOINTS = {
@@ -11,5 +15,4 @@ export const API_ENDPOINTS = {
   QA: `${API_BASE_URL}/qa`,
 };
 
-// Timeout in milliseconds for API calls
-export const API_TIMEOUT_MS = 30000;
+export const API_TIMEOUT_MS = 1500;

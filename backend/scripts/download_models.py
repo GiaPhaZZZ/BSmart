@@ -18,7 +18,10 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-os.environ.setdefault("HF_HOME", str(BASE_DIR / ".cache" / "huggingface"))
+REPO_ROOT = BASE_DIR.parent.parent
+MODELS_DIR = REPO_ROOT / "models"
+MODELS_DIR.mkdir(exist_ok=True)
+os.environ.setdefault("HF_HOME", str(REPO_ROOT / ".cache" / "huggingface"))
 
 from huggingface_hub import snapshot_download
 from ultralytics import YOLO
@@ -35,13 +38,13 @@ for repo_id in MODELS:
     snapshot_download(repo_id=repo_id)
 
 print("Downloading yolo26s.pt ...")
-YOLO(str(BASE_DIR / "yolo26s.pt"))
+YOLO(str(MODELS_DIR / "yolo26s.pt"))
 
 print("Downloading Piper vi_VN voice (vais1000, medium) ...")
-download_voice("vi_VN-vais1000-medium", BASE_DIR / "voices")
+download_voice("vi_VN-vais1000-medium", MODELS_DIR / "voices")
 
 print(
     "Done. HF models cached under ~/.cache/huggingface/hub/, "
-    f"Piper voice under {BASE_DIR / 'voices'}/, "
-    f"YOLO weights at {BASE_DIR / 'yolo26s.pt'}"
+    f"Piper voice under {MODELS_DIR / 'voices'}/, "
+    f"YOLO weights at {MODELS_DIR / 'yolo26s.pt'}"
 )

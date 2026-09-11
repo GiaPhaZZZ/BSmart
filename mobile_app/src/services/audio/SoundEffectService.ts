@@ -34,14 +34,14 @@ export const FEATURE_SOUND_MAP: Record<FeatureKey, FeatureSoundConfig> = {
     bleCommand: 'CMD:PLAY_F1',
   },
   feature2: {
-    soundName: 'open_f4',
+    soundName: 'open_f2',
     fallbackText: 'Đã vào tính năng 2, chụp ảnh',
-    bleCommand: 'CMD:PLAY_F4',
+    bleCommand: 'CMD:PLAY_F2',
   },
   feature3: {
-    soundName: 'open_f2',
+    soundName: 'open_f3',
     fallbackText: 'Đã vào tính năng 3, chế độ dẫn đường',
-    bleCommand: 'CMD:PLAY_F2',
+    bleCommand: 'CMD:PLAY_F3',
   },
 };
 

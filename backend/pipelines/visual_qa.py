@@ -57,17 +57,27 @@ from transformers import (
 from piper import PiperVoice
 
 BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent.parent
+MODELS_DIR = REPO_ROOT / "models"
 
 # ---------- Config ----------
 ASR_MODEL_PATH = "vinai/PhoWhisper-tiny"           # for feature extractor + tokenizer only
 VLM_MODEL_PATH = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
 TRANSLATE_MODEL_PATH = "VietAI/envit5-translation"  # for tokenizer only
 
-ASR_CT2_DIR = BASE_DIR / "phowhisper-ct2-int8"
-TRANSLATE_CT2_DIR = BASE_DIR / "envit5-ct2-int8"
-ENVIT5_TOKENIZER_CACHE = BASE_DIR / ".cache" / "envit5_patched"
+ASR_CT2_DIR = MODELS_DIR / "phowhisper-ct2-int8"
+if not ASR_CT2_DIR.exists():
+    ASR_CT2_DIR = REPO_ROOT / "phowhisper-ct2-int8"
 
-PIPER_VOICE_PATH = BASE_DIR / "voices" / "vi_VN-vais1000-medium.onnx"
+TRANSLATE_CT2_DIR = MODELS_DIR / "envit5-ct2-int8"
+if not TRANSLATE_CT2_DIR.exists():
+    TRANSLATE_CT2_DIR = REPO_ROOT / "envit5-ct2-int8"
+
+ENVIT5_TOKENIZER_CACHE = REPO_ROOT / ".cache" / "envit5_patched"
+
+PIPER_VOICE_PATH = MODELS_DIR / "voices" / "vi_VN-vais1000-medium.onnx"
+if not PIPER_VOICE_PATH.exists():
+    PIPER_VOICE_PATH = REPO_ROOT / "voices" / "vi_VN-vais1000-medium.onnx"
 
 ASR_SAMPLE_RATE = 16000
 MAX_SIDE = 384

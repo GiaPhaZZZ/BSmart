@@ -69,6 +69,17 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
+ * Encode string into Base64 string
+ */
+export function stringToBase64(str: string): string {
+  const bytes = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) {
+    bytes[i] = str.charCodeAt(i) & 0xff;
+  }
+  return bytesToBase64(bytes);
+}
+
+/**
  * Create standard 44-byte WAV header for 16kHz, 16-bit Mono PCM.
  */
 export function createWavHeader(dataSize: number, sampleRate = 16000): Uint8Array {

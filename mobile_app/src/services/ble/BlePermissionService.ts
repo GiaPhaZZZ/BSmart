@@ -49,3 +49,38 @@ export async function requestBlePermissions(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Request all essential runtime permissions (BLE, Audio, Camera) on app launch
+ * so that blind users don't encounter blocking permission dialogs while holding the touch area.
+ */
+export async function requestAllAppPermissions(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+
+  try {
+    const apiLevel = Platform.Version;
+    const permissionsToRequest: string[] = [
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      PermissionsAndroid.PERMISSIONS.CAMERA,
+    ];
+
+    if (typeof apiLevel === 'number' && apiLevel >= 31) {
+      permissionsToRequest.push(
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      );
+    } else {
+      permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+    }
+
+    const results = await PermissionsAndroid.requestMultiple(permissionsToRequest as any);
+    return (
+      results[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] ===
+      PermissionsAndroid.RESULTS.GRANTED
+    );
+  } catch (err) {
+    console.warn('[BlePermissionService] Error requesting all app permissions:', err);
+    return false;
+  }
+}

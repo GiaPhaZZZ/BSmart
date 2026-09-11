@@ -10,9 +10,11 @@ import { BleConnectionState, IBleService } from '../../types';
 import { speakViaBle, stopSpeaking } from '../tts/TtsService';
 
 export const RECONNECT_INTERVAL_MS = 5000;
+export const DEFAULT_MAX_RETRIES = 2;
 
 export interface AutoConnectConfig {
   reconnectIntervalMs?: number;
+  maxRetries?: number;
   enableHaptics?: boolean;
   enableVoiceAnnouncement?: boolean;
 }
@@ -22,6 +24,8 @@ export class BleAutoConnectService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isAutoConnectActive = false;
   private isAttemptingConnect = false;
+  private hasConnectedOnce = false;
+  private retryCount = 0;
   private config: Required<AutoConnectConfig>;
   private logCallback?: (msg: string) => void;
   private unsubConnection?: () => void;
@@ -30,6 +34,7 @@ export class BleAutoConnectService {
     this.bleService = bleService;
     this.config = {
       reconnectIntervalMs: config?.reconnectIntervalMs ?? RECONNECT_INTERVAL_MS,
+      maxRetries: config?.maxRetries ?? DEFAULT_MAX_RETRIES,
       enableHaptics: config?.enableHaptics ?? true,
       enableVoiceAnnouncement: config?.enableVoiceAnnouncement ?? true,
     };
@@ -41,6 +46,7 @@ export class BleAutoConnectService {
   start(onLog?: (msg: string) => void): void {
     if (this.isAutoConnectActive) return;
     this.isAutoConnectActive = true;
+    this.retryCount = 0;
     this.logCallback = onLog;
 
     this.log('Auto-Connect Service started');
@@ -77,6 +83,8 @@ export class BleAutoConnectService {
     if (state === BleConnectionState.CONNECTED) {
       this.cancelScheduledReconnect();
       this.isAttemptingConnect = false;
+      this.hasConnectedOnce = true;
+      this.retryCount = 0;
       this.log('Glasses connected successfully');
 
       // Haptic confirmation: double pulse for blind user
@@ -88,16 +96,21 @@ export class BleAutoConnectService {
       if (this.config.enableVoiceAnnouncement) {
         speakViaBle('Kính BSmart đã kết nối thành công', this.bleService).catch(() => {});
       }
+    } else if (state === BleConnectionState.BLUETOOTH_OFF) {
+      this.cancelScheduledReconnect();
+      this.isAttemptingConnect = false;
+      this.log('Bluetooth is turned off. Auto-connect paused.');
     } else if (state === BleConnectionState.DISCONNECTED) {
       this.isAttemptingConnect = false;
-      this.log('Connection lost. Scheduling auto-reconnect...');
 
-      // Haptic confirmation: long buzz for disconnect
-      if (this.config.enableHaptics) {
+      // Haptic confirmation: ONLY vibrate if glasses were previously connected in this session!
+      if (this.hasConnectedOnce && this.config.enableHaptics) {
         Vibration.vibrate(400);
+        this.hasConnectedOnce = false;
+        // Unexpected disconnect after having been connected: trigger reconnect
+        this.retryCount = 0;
+        this.scheduleReconnect(this.config.reconnectIntervalMs);
       }
-
-      this.scheduleReconnect(this.config.reconnectIntervalMs);
     }
   }
 
@@ -111,7 +124,11 @@ export class BleAutoConnectService {
       this.reconnectTimer = null;
       if (!this.isAutoConnectActive) return;
 
-      if (this.bleService.getConnectionState() === BleConnectionState.CONNECTED) {
+      const currentState = this.bleService.getConnectionState();
+      if (
+        currentState === BleConnectionState.CONNECTED ||
+        currentState === BleConnectionState.BLUETOOTH_OFF
+      ) {
         return;
       }
 
@@ -119,16 +136,27 @@ export class BleAutoConnectService {
         return;
       }
 
+      if (this.retryCount >= this.config.maxRetries) {
+        this.log('Không tìm thấy kính thông minh. Chuyển sang chế độ độc lập trên điện thoại.');
+        this.stop();
+        return;
+      }
+
+      this.retryCount++;
       this.isAttemptingConnect = true;
-      this.log('Searching for BSmart glasses in range...');
+      this.log(`Tìm kiếm kính BSmart (lần ${this.retryCount}/${this.config.maxRetries})...`);
 
       try {
         await this.bleService.connect();
       } catch (err: any) {
-        this.log(`Auto-connect attempt failed (${err?.message || 'offline'}). Retrying...`);
         this.isAttemptingConnect = false;
-        // Schedule next retry
-        this.scheduleReconnect(this.config.reconnectIntervalMs);
+        if (this.retryCount < this.config.maxRetries) {
+          this.log(`Không thấy kính (${err?.message || 'hết thời gian quét'}). Sẽ thử lại lần cuối...`);
+          this.scheduleReconnect(this.config.reconnectIntervalMs);
+        } else {
+          this.log('Không tìm thấy kính BSmart. Đã dừng tìm kiếm để tiết kiệm pin (Chế độ độc lập sẵn sàng).');
+          this.stop();
+        }
       }
     }, delayMs);
   }

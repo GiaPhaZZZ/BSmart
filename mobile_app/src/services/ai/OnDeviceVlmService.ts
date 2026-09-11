@@ -17,6 +17,7 @@
 
 import { NativeModules } from 'react-native';
 import { modelRegistry } from './ModelRegistry';
+import { askQA } from '../api/ApiService';
 
 const { OnnxInferenceModule } = NativeModules;
 
@@ -47,7 +48,7 @@ export const SMOLVLM2_CONFIG: SmolVlmOptimizationConfig = {
 };
 
 /**
- * Run SmolVLM2-256M on-device inference on an image and a spoken question (100% Offline).
+ * Run Visual QA by trying the Backend Python Server first, and fallback to Native ONNX.
  * @param imageBase64 - base64 JPEG from smart glasses
  * @param question - user query in Vietnamese
  */
@@ -55,16 +56,28 @@ export async function askQAOnDevice(
   imageBase64: string,
   question: string,
 ): Promise<VlmAnswerResult> {
-  const isReady = modelRegistry.isModelReady('smolvlm2');
-
-  if (!isReady || !imageBase64 || imageBase64.length === 0) {
+  if (!imageBase64 || imageBase64.length === 0) {
     return {
       answer: 'Không thể xử lý hình ảnh lúc này. Vui lòng thử lại.',
       isSuccess: false,
     };
   }
 
-  // 1. Try Native C++ ONNX Runtime Engine (onnxruntime-android)
+  // 1. Try Backend Python Server First (Because ONNX is still simulated)
+  try {
+    const apiResult = await askQA(imageBase64, question);
+    if (apiResult && apiResult.answer && apiResult.answer.trim().length > 0) {
+      return {
+        answer: apiResult.answer.trim(),
+        isSuccess: true,
+        model: 'Python-Backend-SmolVLM',
+      };
+    }
+  } catch (err) {
+    console.log('[VLM] Backend Python server not reachable, using offline VLM:', err);
+  }
+
+  // 2. Fallback to Native C++ ONNX Runtime Engine
   try {
     if (OnnxInferenceModule && typeof OnnxInferenceModule.runVisualQA === 'function') {
       const nativeResult = await OnnxInferenceModule.runVisualQA(imageBase64, question);
@@ -79,15 +92,13 @@ export async function askQAOnDevice(
       }
     }
   } catch (err) {
-    console.warn('[VLM] Native ONNX execution warning, using optimized on-device decoder fallback:', err);
+    console.warn('[VLM] Native ONNX execution warning:', err);
   }
 
   // On-device SmolVLM2 ONNX not available and no backend reachable.
-  // DO NOT return fabricated scene descriptions — this is a safety-critical feature for
-  // visually impaired users. A fake answer is worse than an honest "unavailable".
   console.warn('[VLM] SmolVLM2 not available and no backend reachable.');
   return {
-    answer: 'Tính năng hỏi đáp hình ảnh chưa sẵn sàng. Vui lòng kết nối máy chủ hoặc thử lại sau.',
+    answer: 'Không kết nối được với máy chủ máy tính để phân tích ảnh.',
     isSuccess: false,
     model: 'unavailable',
   };

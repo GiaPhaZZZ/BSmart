@@ -4,6 +4,10 @@
  * See: docs/requirement.md §6
  */
 
+import { NativeModules } from 'react-native';
+
+const { ImageStorageModule } = NativeModules;
+
 export interface SavedImageMeta {
   id: string;
   filename: string;
@@ -19,21 +23,24 @@ const savedImages: SavedImageMeta[] = [];
  * @returns path / filename of saved image
  */
 export async function saveCapturedImage(imageBase64: string | null): Promise<string> {
-  const timestamp = new Date();
-  const dateStr = timestamp.toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-  const filename = `BSmart_Photo_${dateStr}.jpg`;
+  if (!imageBase64) return 'Lỗi: Không có ảnh';
+  
+  try {
+    const filename = await ImageStorageModule.saveImageToGallery(imageBase64);
+    
+    const meta: SavedImageMeta = {
+      id: `${Date.now()}`,
+      filename,
+      timestamp: new Date().toLocaleString('vi-VN'),
+      sizeBytes: Math.round((imageBase64.length * 3) / 4),
+    };
 
-  const sizeEstimate = imageBase64 ? Math.round((imageBase64.length * 3) / 4) : 45000;
-
-  const meta: SavedImageMeta = {
-    id: `${Date.now()}`,
-    filename,
-    timestamp: timestamp.toLocaleString('vi-VN'),
-    sizeBytes: sizeEstimate,
-  };
-
-  savedImages.push(meta);
-  return filename;
+    savedImages.push(meta);
+    return filename;
+  } catch (error) {
+    console.error('Failed to save image:', error);
+    throw error;
+  }
 }
 
 /**

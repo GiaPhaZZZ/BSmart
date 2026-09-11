@@ -18,10 +18,13 @@ from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent
+MODELS_DIR = REPO_ROOT / "models"
 
-# Ensure current directory is in sys.path
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+# Ensure current directory and pipelines are in sys.path
+for p in [str(BASE_DIR), str(REPO_ROOT)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 app = FastAPI(
     title="BSmart AI Backend",
@@ -52,7 +55,7 @@ def get_asr_model():
         return ASR_PROCESSOR, ASR_MODEL
 
     try:
-        import Function0_voice_control as f0
+        from pipelines import voice_control as f0
         if f0.ASR_CT2_DIR.exists():
             print("[Backend] Loading PhoWhisper ASR model...")
             whisper_processor, asr_model = f0._load_asr()
@@ -73,9 +76,9 @@ def get_asr_model():
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    asr_available = (BASE_DIR / "phowhisper-ct2-int8").exists()
-    vlm_available = (BASE_DIR / "envit5-ct2-int8").exists()
-    yolo_available = (BASE_DIR / "yolo26s.pt").exists()
+    asr_available = (MODELS_DIR / "phowhisper-ct2-int8").exists() or (BASE_DIR / "phowhisper-ct2-int8").exists()
+    vlm_available = (MODELS_DIR / "envit5-ct2-int8").exists() or (BASE_DIR / "envit5-ct2-int8").exists()
+    yolo_available = (MODELS_DIR / "yolo26s.pt").exists() or (BASE_DIR / "yolo26s.pt").exists()
 
     return {
         "status": "ok",
@@ -111,7 +114,7 @@ async def transcribe_endpoint(
     try:
         processor, model = get_asr_model()
         if processor and model:
-            import Function0_voice_control as f0
+            from pipelines import voice_control as f0
             transcribed_text = f0.speech_to_text_vi(tmp_path)
             fid, hits, _ = f0.match_feature(transcribed_text)
             return {
@@ -171,7 +174,7 @@ async def qa_endpoint(
         if not query_question and tmp_audio_path:
             processor, model = get_asr_model()
             if processor and model:
-                import Function0_voice_control as f0
+                from pipelines import voice_control as f0
                 query_question = f0.speech_to_text_vi(tmp_audio_path)
             else:
                 query_question = "Trước mặt tôi có gì?"
@@ -179,12 +182,13 @@ async def qa_endpoint(
         if not query_question:
             query_question = "Miêu tả khung cảnh trước mặt."
 
-        # Try to run Function1_chatbot pipeline if models are loaded
+        # Try to run Visual QA pipeline if models are loaded
         try:
-            import Function1_chatbot as f1
+            from pipelines import visual_qa as f1
             if tmp_image_path and f1.ASR_CT2_DIR.exists() and f1.TRANSLATE_CT2_DIR.exists():
                 out_wav = Path(tempfile.mktemp(suffix=".wav"))
-                result_text = f1.run_query(tmp_image_path, tmp_audio_path or Path("test/audio/mieu_ta_khung_canh.mp3"), out_wav)
+                sample_audio = REPO_ROOT / "test" / "audio" / "mieu_ta_khung_canh.mp3"
+                result_text = f1.run_query(tmp_image_path, tmp_audio_path or sample_audio, out_wav)
                 return {
                     "question": query_question,
                     "answer": result_text or "Phía trước bạn có vật cản và con đường trống.",
@@ -224,7 +228,10 @@ async def navigate_endpoint(
 
     try:
         # Check YOLO model
-        yolo_path = BASE_DIR / "yolo26s.pt"
+        yolo_path = MODELS_DIR / "yolo26s.pt"
+        if not yolo_path.exists():
+            yolo_path = BASE_DIR / "yolo26s.pt"
+
         if yolo_path.exists():
             try:
                 from ultralytics import YOLO
@@ -244,6 +251,7 @@ async def navigate_endpoint(
     finally:
         if tmp_path.exists():
             os.remove(tmp_path)
+
 
 
 if __name__ == "__main__":

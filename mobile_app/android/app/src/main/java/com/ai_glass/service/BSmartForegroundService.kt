@@ -35,9 +35,27 @@ class BSmartForegroundService : Service() {
             return START_NOT_STICKY
         }
 
-        acquireWakeLock()
-        val notification = createNotification()
-        startForeground(NOTIFICATION_ID, notification)
+        try {
+            acquireWakeLock()
+            val notification = createNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: SecurityException) {
+            android.util.Log.w("ForegroundService", "SecurityException starting foreground service: ${e.message}")
+            stopSelf()
+            return START_NOT_STICKY
+        } catch (e: Exception) {
+            android.util.Log.e("ForegroundService", "Error starting foreground service", e)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         return START_STICKY
     }
@@ -50,7 +68,7 @@ class BSmartForegroundService : Service() {
                 "BSmart::ForegroundServiceWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire()
+                acquire(10 * 60 * 1000L) // 10-minute safety timeout to prevent battery drain
             }
         }
     }

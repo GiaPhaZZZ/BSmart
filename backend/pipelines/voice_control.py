@@ -55,17 +55,23 @@ import librosa
 from transformers import WhisperProcessor
 
 BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent.parent
+MODELS_DIR = REPO_ROOT / "models"
 
 # ---------- Config ----------
 ASR_MODEL_PATH = "vinai/PhoWhisper-tiny"   # for feature extractor + tokenizer only
-ASR_CT2_DIR = BASE_DIR / "phowhisper-ct2-int8"
+ASR_CT2_DIR = MODELS_DIR / "phowhisper-ct2-int8"
+if not ASR_CT2_DIR.exists():
+    ASR_CT2_DIR = REPO_ROOT / "phowhisper-ct2-int8"
 
 ASR_SAMPLE_RATE = 16000
 ASR_MAX_LENGTH = 200
 
 DEVICE = "cpu"  # voice-command transcription is tiny/fast; keep it simple and portable
 
-AUDIO_DIR = BASE_DIR / "activate_voice"
+AUDIO_DIR = REPO_ROOT / "assets" / "audio"
+if not AUDIO_DIR.exists():
+    AUDIO_DIR = REPO_ROOT / "activate_voice"
 
 # ---------- Feature keyword map ----------
 # Each feature maps to a list of trigger words/phrases. Matching is done on

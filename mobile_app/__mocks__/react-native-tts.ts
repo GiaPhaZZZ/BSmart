@@ -10,7 +10,7 @@ const mockTts = {
   setDefaultRate: jest.fn(() => Promise.resolve('success')),
   speak: jest.fn(() => 'mock-utterance-id'),
   stop: jest.fn(() => Promise.resolve(true)),
-  addEventListener: jest.fn(),
+  addEventListener: jest.fn(() => ({ remove: jest.fn() })),
   removeEventListener: jest.fn(),
 };
 

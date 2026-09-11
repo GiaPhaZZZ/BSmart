@@ -37,8 +37,9 @@
 
 #define BLE_DEVICE_NAME "BSmart_Glasses"
 
-// --- Audio Configuration (FW-03) ---
+// --- Audio Configuration (FW-03 & Direction B Speaker) ---
 #define I2S_PORT I2S_NUM_0
+#define I2S_SPK_PORT I2S_NUM_1
 #define SAMPLE_RATE 16000
 // 120 bytes PCM (60 samples @ 16-bit) encodes to exactly 160 chars in Base64
 // (Multiple of 3 bytes) Perfectly fits inside standard BLE MTU packet (<180
@@ -117,9 +118,23 @@ class AudioOutCallbacks : public BLECharacteristicCallbacks {
     } else if (value == "CMD:PLAY_F4") {
       Serial.println("[BLE Audio Out] Trigger activation sound: Feature 2 (Chụp ảnh)");
     } else {
-      // Streamed TTS audio payload
-      Serial.printf("[BLE Audio Out] Received %u bytes audio data from App\n",
-                    (unsigned int)value.length());
+      // Decode Base64 PCM audio or stream raw binary PCM to MAX98357A I2S speaker (Direction B)
+      size_t decodedLen = 0;
+      uint8_t pcmBuf[512];
+      int ret = mbedtls_base64_decode(pcmBuf, sizeof(pcmBuf), &decodedLen,
+                                      (const unsigned char *)value.c_str(), value.length());
+      if (ret == 0 && decodedLen > 0) {
+        size_t bytesWritten = 0;
+        i2s_write(I2S_SPK_PORT, pcmBuf, decodedLen, &bytesWritten, 100 / portTICK_PERIOD_MS);
+        Serial.printf("[I2S Speaker] Played %u bytes decoded PCM via MAX98357A\n", (unsigned int)bytesWritten);
+      } else if (value.length() > 0) {
+        // Direct raw binary PCM stream from BlePlx GATT write
+        size_t bytesWritten = 0;
+        i2s_write(I2S_SPK_PORT, (const uint8_t *)value.data(), value.length(), &bytesWritten, 100 / portTICK_PERIOD_MS);
+        Serial.printf("[I2S Speaker] Played %u bytes raw PCM via MAX98357A\n", (unsigned int)bytesWritten);
+      } else {
+        Serial.printf("[BLE Audio Out] Received empty payload\n");
+      }
     }
   }
 };
@@ -332,6 +347,45 @@ bool initI2SMicrophone() {
   return true;
 }
 
+// =============================================================================
+// I2S DAC Speaker Initialization (MAX98357A - Direction B)
+// =============================================================================
+bool initI2SSpeaker() {
+  i2s_config_t i2s_spk_config = {
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+      .sample_rate = SAMPLE_RATE,
+      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+      .dma_buf_count = 6,
+      .dma_buf_len = 256,
+      .use_apll = false,
+      .tx_desc_auto_clear = true,
+      .fixed_mclk = 0};
+
+  i2s_pin_config_t spk_pin_config = {
+      .bck_io_num = I2S_SPK_BCLK_IO,
+      .ws_io_num = I2S_SPK_LRC_IO,
+      .data_out_num = I2S_SPK_DOUT_IO,
+      .data_in_num = I2S_PIN_NO_CHANGE};
+
+  esp_err_t err = i2s_driver_install(I2S_SPK_PORT, &i2s_spk_config, 0, NULL);
+  if (err != ESP_OK) {
+    Serial.printf("[I2S Speaker] Driver install failed: 0x%x\n", err);
+    return false;
+  }
+
+  err = i2s_set_pin(I2S_SPK_PORT, &spk_pin_config);
+  if (err != ESP_OK) {
+    Serial.printf("[I2S Speaker] Pin configuration failed: 0x%x\n", err);
+    return false;
+  }
+
+  Serial.println("[I2S Speaker] MAX98357A I2S DAC initialized (16kHz, 16-bit Mono).");
+  return true;
+}
+
 /**
  * Record audio chunk while user holds the button and stream over BLE.
  * Uses 120 bytes PCM -> 160 chars Base64 on stack (<180 bytes MTU packet).
@@ -441,6 +495,9 @@ void setup() {
 
   // 3. Initialize Microphone
   initI2SMicrophone();
+
+  // 3b. Initialize I2S DAC Speaker (MAX98357A)
+  initI2SSpeaker();
 
   // 4. Initialize BLE GATT Server
   BLEDevice::init(BLE_DEVICE_NAME);

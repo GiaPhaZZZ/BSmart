@@ -18,6 +18,10 @@ class MainApplication : Application(), ReactApplication {
           add(com.ai_glass.onnx.OnnxInferencePackage())
           // Register BSmart native Audio Player module for activation voice clips
           add(com.ai_glass.audio.AudioPlayerPackage())
+          // Register BSmart native Phone Camera module for standalone mode
+          add(com.ai_glass.camera.PhoneCameraPackage())
+          add(com.ai_glass.storage.ImageStoragePackage())
+          add(com.ai_glass.location.LocationPackage())
           // Register BSmart Foreground Service module for background life-cycle protection
           add(com.ai_glass.service.ForegroundServicePackage())
         },

@@ -34,6 +34,11 @@
   #define I2S_MIC_CLK_IO    42  // PDM CLK (ws_io_num)
   #define I2S_MIC_DATA_IO   41  // PDM DATA (data_in_num)
 
+  // External I2S DAC Speaker (MAX98357A) for XIAO ESP32S3
+  #define I2S_SPK_BCLK_IO   8   // BCLK (D8)
+  #define I2S_SPK_LRC_IO    9   // LRC / Word Select (D9)
+  #define I2S_SPK_DOUT_IO   7   // DIN / Data Out (D7)
+
 #elif defined(CAMERA_MODEL_ESP32S3_CAM_INMP441)
   // Standard ESP32-S3 CAM (e.g. Freenove / Ai-Thinker ESP32-S3 CAM)
   #define PWDN_GPIO_NUM     -1
@@ -59,6 +64,11 @@
   #define I2S_MIC_SCK_IO    1   // BCLK
   #define I2S_MIC_WS_IO     2   // LRC / WS
   #define I2S_MIC_DIN_IO    3   // SD / DIN
+
+  // External I2S DAC Speaker (MAX98357A) for ESP32-S3 CAM
+  #define I2S_SPK_BCLK_IO   47  // BCLK
+  #define I2S_SPK_LRC_IO    48  // LRC / Word Select
+  #define I2S_SPK_DOUT_IO   21  // DIN / Data Out
 #endif
 
 // Physical Button Pin (Action / Record button - active LOW with internal pull-up)

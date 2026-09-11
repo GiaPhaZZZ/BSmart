@@ -49,3 +49,10 @@ The simulation uses:
 
 --cycle-interval
     Combined navigation + hazard announcement interval
+
+
+=> It use search and navigation API
+
+Public token of MAPBOX: 
+
+pk.eyJ1IjoiMTIzcGhhdDQ1NiIsImEiOiJjbXR0dnZ6bW8wYjRsMnpvajBvcHNpMWM3In0.XuLJMgvVYi48jWiAfI8w-g

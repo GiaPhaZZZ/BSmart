@@ -4,7 +4,11 @@
  * See: docs/requirement.md §2.3, SKILL.md §4.B
  */
 
-import { API_ENDPOINTS, API_TIMEOUT_MS } from '../../constants/apiConfig';
+import {
+  API_ENDPOINTS,
+  API_TIMEOUT_MS,
+  API_VQA_TIMEOUT_MS,
+} from '../../constants/apiConfig';
 
 export interface TranscribeResult {
   text: string;
@@ -12,6 +16,10 @@ export interface TranscribeResult {
 
 export interface QAResult {
   answer: string;
+  question?: string;
+  question_en?: string;
+  answer_en?: string;
+  model?: string;
 }
 
 async function fetchWithTimeout(
@@ -85,15 +93,57 @@ export async function askQA(
   formData.append('image', imageBlob);
   formData.append('question', question);
 
-  const response = await fetchWithTimeout(API_ENDPOINTS.QA, {
-    method: 'POST',
-    body: formData,
+  console.log('[Feature1][ServerVQA] POST /qa request', {
+    endpoint: API_ENDPOINTS.QA,
+    imageBytesApprox: Math.round((imageBase64.length * 3) / 4),
+    question,
+    timeoutMs: API_VQA_TIMEOUT_MS,
+  });
+
+  const response = await fetchWithTimeout(
+    API_ENDPOINTS.QA,
+    {
+      method: 'POST',
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: formData,
+    },
+    API_VQA_TIMEOUT_MS,
+  );
+
+  console.log('[Feature1][ServerVQA] HTTP response', {
+    status: response.status,
+    ok: response.ok,
   });
 
   if (!response.ok) {
-    throw new Error(`QA failed: ${response.status} ${response.statusText}`);
+    let details = '';
+    try {
+      details = JSON.stringify(await response.json());
+    } catch {
+      details = await response.text().catch(() => '');
+    }
+    throw new Error(`QA failed: ${response.status} ${response.statusText} ${details}`.trim());
   }
 
   const data = await response.json();
-  return { answer: data.answer ?? '' };
+  if (!data?.answer) {
+    throw new Error('QA failed: response missing answer');
+  }
+
+  console.log('[Feature1][ServerVQA] Parsed response', {
+    answer: data.answer,
+    question_en: data.question_en,
+    answer_en: data.answer_en,
+    model: data.model,
+  });
+
+  return {
+    answer: data.answer,
+    question: data.question,
+    question_en: data.question_en,
+    answer_en: data.answer_en,
+    model: data.model,
+  };
 }

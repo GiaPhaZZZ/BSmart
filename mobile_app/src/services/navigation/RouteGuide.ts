@@ -82,6 +82,13 @@ export class RouteGuide {
     this.polylineCoords = route.geometry?.coordinates || [];
   }
 
+  public clearRoute() {
+    this.route = null;
+    this.currentStepIndex = 0;
+    this.isFinished = false;
+    this.polylineCoords = [];
+  }
+
   public getRoute(): MapboxRoute | null {
     return this.route;
   }

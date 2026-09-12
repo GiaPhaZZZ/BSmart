@@ -108,6 +108,12 @@ android {
             outputFileName = "BSmart.apk"
         }
     }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -121,5 +127,8 @@ dependencies {
     }
 
     // Microsoft ONNX Runtime Mobile for On-Device AI inference
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.29.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.13")
 }

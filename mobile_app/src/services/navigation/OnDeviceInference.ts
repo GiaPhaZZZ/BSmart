@@ -77,14 +77,45 @@ export async function runInference(
     if (Platform.OS === 'android' && OnnxInferenceModule?.runObjectDetection) {
       try {
         const nativeObjects = await OnnxInferenceModule.runObjectDetection(imageBase64);
-        if (Array.isArray(nativeObjects) && nativeObjects.length > 0) {
-          return {
-            objects: nativeObjects as DetectedObject[],
-            isReady: true,
-          };
+        console.log(
+          `[Inference] YOLO returned ${Array.isArray(nativeObjects) ? nativeObjects.length : 0} object(s)`,
+        );
+
+        if (!Array.isArray(nativeObjects)) {
+          console.warn('[Inference] YOLO returned invalid detection payload:', nativeObjects);
+          return { objects: [], isReady: false };
         }
+
+        if (!OnnxInferenceModule?.runDepthEstimation) {
+          console.warn('[Inference] Native runDepthEstimation is not available.');
+          return { objects: [], isReady: false };
+        }
+
+        const depth = await OnnxInferenceModule.runDepthEstimation(imageBase64);
+        const relativeDepthMean = Number(depth?.relativeDepthMean);
+        if (!Number.isFinite(relativeDepthMean)) {
+          console.warn('[Inference] ZipDepth returned invalid depth payload:', depth);
+          return { objects: [], isReady: false };
+        }
+
+        console.log(`[Inference] ZipDepth relativeDepthMean=${relativeDepthMean}`);
+
+        if (nativeObjects.length === 0) {
+          return { objects: [], isReady: true };
+        }
+
+        const objects = (nativeObjects as DetectedObject[]).map(obj => ({
+          ...obj,
+          depthScore: relativeDepthMean,
+        }));
+
+        return {
+          objects,
+          isReady: true,
+        };
       } catch (nativeErr) {
-        console.warn('[Inference] Native ONNX warning, using graceful fallback:', nativeErr);
+        console.warn('[Inference] Native ONNX inference failed:', nativeErr);
+        return { objects: [], isReady: false };
       }
     }
 

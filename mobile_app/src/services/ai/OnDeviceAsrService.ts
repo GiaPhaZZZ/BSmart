@@ -9,7 +9,7 @@
 
 import { AppState } from '../../types';
 import { modelRegistry } from './ModelRegistry';
-import { transcribeAudio } from '../api/ApiService';
+
 
 export interface AsrTranscriptionResult {
   text: string;
@@ -26,11 +26,79 @@ export function normalizeVietnameseText(str: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
+const VOICE_COMMAND_ALIASES: Record<AppState, string[]> = {
+  [AppState.IDLE]: [],
+  [AppState.LISTENING]: [],
+  [AppState.PROCESSING]: [],
+  [AppState.FEATURE_1_QA]: [
+    '1',
+    'so 1',
+    'mot',
+    'so mot',
+    'tinh nang 1',
+    'tinh nang mot',
+    'tinh nang so mot',
+    'tinh nang so 1',
+    'chuc nang 1',
+    'chuc nang mot',
+    'chuc nang so 1',
+    'chuc nang so mot',
+    'hoi dap',
+    'gpt',
+  ],
+  [AppState.FEATURE_2_CAPTURE]: [
+    '2',
+    'hai',
+    'so 2',
+    'so hai',
+    'chup anh',
+    'chup',
+    'tinh nang 2',
+    'tinh nang so 2',
+    'tinh nang hai',
+    'tinh nang so hai',
+    'tinh nang hay',
+    'tinh nang so hay',
+    'chuc nang 2',
+    'chuc nang hai',
+    'chuc nang hay',
+    'chuc nang so 2',
+    'chuc nang so hai',
+    'chuc nang so hay',
+    'so hay',
+  ],
+  [AppState.FEATURE_3_NAVIGATION]: [
+    '3',
+    'ba',
+    'so 3',
+    'so ba',
+    'tinh nang 3',
+    'tinh nang so 3',
+    'tinh nang ba',
+    'tinh nang so ba',
+    'chuc nang 3',
+    'chuc nang ba',
+    'chuc nang so 3',
+    'chuc nang so ba',
+    'tim duong',
+    'dan duong',
+    'vat can',
+    'canh bao',
+  ],
+};
+
+function containsAlias(normText: string, alias: string): boolean {
+  const escapedAlias = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|\\s)${escapedAlias}(?=\\s|$)`).test(normText);
+}
+
 /**
- * Spot keyword from transcribed Vietnamese text using flexible Regex.
+ * Spot keyword from transcribed Vietnamese text using accent-insensitive aliases.
  * Matches:
  *   - "tính năng 1" / "tính năng một" / "gpt" -> FEATURE_1_QA
  *   - "tính năng 2" / "tính năng hai"         -> FEATURE_2_CAPTURE
@@ -39,19 +107,13 @@ export function normalizeVietnameseText(str: string): string {
 export function matchVoiceCommand(rawText: string): AppState | null {
   const norm = normalizeVietnameseText(rawText);
 
-  if (/tinh nang (1|mot)|chuc nang (1|mot)|so (1|mot)|hoi dap|gpt/i.test(norm)) {
-    return AppState.FEATURE_1_QA;
-  }
-
-  if (/tinh nang (2|hai|hay)|chuc nang (2|hai|hay)|so (2|hai|hay)|chup anh/i.test(norm)) {
-    return AppState.FEATURE_2_CAPTURE;
-  }
-
-  if (/tinh nang (3|ba)|chuc nang (3|ba)|so (3|ba)|dan duong|vat can/i.test(norm)) {
-    return AppState.FEATURE_3_NAVIGATION;
-  }
-
-  return null;
+  return [
+    AppState.FEATURE_1_QA,
+    AppState.FEATURE_2_CAPTURE,
+    AppState.FEATURE_3_NAVIGATION,
+  ].find(state =>
+    VOICE_COMMAND_ALIASES[state].some(alias => containsAlias(norm, alias)),
+  ) ?? null;
 }
 
 import { NativeModules, Platform } from 'react-native';
@@ -102,9 +164,9 @@ export async function transcribeAudioOnDevice(
 }
 
 /**
- * Unified speech transcription:
- * 1. Tries PhoWhisper server (/transcribe) for actual neural Vietnamese speech recognition.
- * 2. Falls back to on-device ASR handler if server is unavailable/offline.
+ * Unified speech transcription — on-device PRIMARY (no cloud fallback).
+ * Architecture: On-device PhoWhisper ONNX inference is the only production path.
+ * Returns structured failure if model unavailable or inference fails.
  */
 export async function transcribeSpeech(
   audioBase64: string,
@@ -112,23 +174,5 @@ export async function transcribeSpeech(
   if (!audioBase64 || audioBase64.length === 0) {
     return { text: '', matchedState: null, confidence: 0 };
   }
-
-  // 1. Try real PhoWhisper backend endpoint
-  try {
-    const apiResult = await transcribeAudio(audioBase64);
-    if (apiResult && apiResult.text && apiResult.text.trim().length > 0) {
-      const cleanText = apiResult.text.trim();
-      const matched = matchVoiceCommand(cleanText);
-      return {
-        text: cleanText,
-        matchedState: matched,
-        confidence: 0.98,
-      };
-    }
-  } catch (err) {
-    console.log('[ASR] Backend PhoWhisper not reachable, using offline ASR:', err);
-  }
-
-  // 2. Fallback to on-device handler
   return transcribeAudioOnDevice(audioBase64);
 }

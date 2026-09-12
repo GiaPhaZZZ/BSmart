@@ -12,6 +12,7 @@ import android.hardware.camera2.*
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.view.Surface
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -34,8 +35,16 @@ class PhoneCameraModule(private val reactContext: ReactApplicationContext) :
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
+    private var previewSurface: Surface? = null
+    private var previewSurfaceTexture: android.graphics.SurfaceTexture? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+
+    private companion object {
+        private const val CAPTURE_WARMUP_MS = 1200L
+        private const val AF_TRIGGER_SETTLE_MS = 500L
+        private const val JPEG_QUALITY = 92
+    }
 
     override fun getName(): String = "PhoneCameraModule"
 
@@ -65,10 +74,44 @@ class PhoneCameraModule(private val reactContext: ReactApplicationContext) :
             cameraDevice = null
             imageReader?.close()
             imageReader = null
+            previewSurface?.release()
+            previewSurface = null
+            previewSurfaceTexture?.release()
+            previewSurfaceTexture = null
         } catch (e: Exception) {
             Log.w(TAG, "Error closing camera resources", e)
         } finally {
             stopBackgroundThread()
+        }
+    }
+
+    private fun applyAutoControls(
+        builder: CaptureRequest.Builder,
+        chars: CameraCharacteristics
+    ) {
+        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+
+        val afModes = chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+        when {
+            afModes?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) == true ->
+                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            afModes?.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) == true ->
+                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+        }
+
+        val aeModes = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)
+        if (aeModes?.contains(CaptureRequest.CONTROL_AE_MODE_ON) == true) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        }
+
+        val awbModes = chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
+        if (awbModes?.contains(CaptureRequest.CONTROL_AWB_MODE_AUTO) == true) {
+            builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+        }
+
+        val stabilizationModes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+        if (stabilizationModes?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON) == true) {
+            builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
         }
     }
 
@@ -125,6 +168,15 @@ class PhoneCameraModule(private val reactContext: ReactApplicationContext) :
             }
 
             imageReader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
+            previewSurfaceTexture = android.graphics.SurfaceTexture(0).apply {
+                setDefaultBufferSize(width, height)
+            }
+            previewSurface = Surface(previewSurfaceTexture)
+            Log.i(
+                TAG,
+                "Phone camera capture configured: camera=$cameraId size=${width}x$height " +
+                    "orientation=$sensorOrientation warmup=${CAPTURE_WARMUP_MS}ms"
+            )
 
             var promiseSettled = false
 
@@ -142,9 +194,14 @@ class PhoneCameraModule(private val reactContext: ReactApplicationContext) :
                     val rotatedBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true)
                     
                     val outputStream = java.io.ByteArrayOutputStream()
-                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
                     val rotatedBytes = outputStream.toByteArray()
                     val base64 = Base64.encodeToString(rotatedBytes, Base64.NO_WRAP)
+                    Log.i(
+                        TAG,
+                        "Phone camera captured JPEG: ${rotatedBitmap.width}x${rotatedBitmap.height}, " +
+                            "${rotatedBytes.size} bytes"
+                    )
                     
                     originalBitmap.recycle()
                     rotatedBitmap.recycle()
@@ -179,7 +236,8 @@ class PhoneCameraModule(private val reactContext: ReactApplicationContext) :
                     cameraDevice = camera
                     try {
                         val surface = imageReader?.surface
-                        if (surface == null) {
+                        val preview = previewSurface
+                        if (surface == null || preview == null) {
                             if (!promiseSettled) {
                                 promiseSettled = true
                                 promise.reject("ERR_SURFACE", "ImageReader surface is null")
@@ -189,17 +247,58 @@ class PhoneCameraModule(private val reactContext: ReactApplicationContext) :
                         }
 
                         camera.createCaptureSession(
-                            listOf(surface),
+                            listOf(preview, surface),
                             object : CameraCaptureSession.StateCallback() {
                                 override fun onConfigured(session: CameraCaptureSession) {
                                     captureSession = session
                                     try {
-                                        val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                                            addTarget(surface)
-                                            set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-                                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                        val previewBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                            addTarget(preview)
+                                            applyAutoControls(this, chars)
                                         }
-                                        session.capture(captureBuilder.build(), null, backgroundHandler)
+                                        session.setRepeatingRequest(previewBuilder.build(), null, backgroundHandler)
+
+                                        backgroundHandler?.postDelayed({
+                                            if (promiseSettled) {
+                                                return@postDelayed
+                                            }
+                                            try {
+                                                val focusBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                                    addTarget(preview)
+                                                    applyAutoControls(this, chars)
+                                                    set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                                                    set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+                                                }
+                                                session.capture(focusBuilder.build(), null, backgroundHandler)
+                                            } catch (e: Exception) {
+                                                Log.w(TAG, "AF/AE trigger failed; continuing to still capture", e)
+                                            }
+
+                                            backgroundHandler?.postDelayed({
+                                                if (promiseSettled) {
+                                                    return@postDelayed
+                                                }
+                                                try {
+                                                    val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                                                        addTarget(surface)
+                                                        applyAutoControls(this, chars)
+                                                        set(CaptureRequest.CONTROL_CAPTURE_INTENT, CameraMetadata.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
+                                                        set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
+                                                        set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                                                        set(CaptureRequest.JPEG_QUALITY, JPEG_QUALITY.toByte())
+                                                    }
+                                                    session.stopRepeating()
+                                                    session.capture(captureBuilder.build(), null, backgroundHandler)
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Capture request failed after warmup", e)
+                                                    if (!promiseSettled) {
+                                                        promiseSettled = true
+                                                        promise.reject("ERR_CAPTURE_REQ", e.message)
+                                                    }
+                                                    closeCameraResources()
+                                                }
+                                            }, AF_TRIGGER_SETTLE_MS)
+                                        }, CAPTURE_WARMUP_MS)
                                     } catch (e: Exception) {
                                         Log.e(TAG, "Capture request failed", e)
                                         if (!promiseSettled) {

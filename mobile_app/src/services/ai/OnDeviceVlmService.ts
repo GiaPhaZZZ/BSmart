@@ -17,7 +17,7 @@
 
 import { NativeModules } from 'react-native';
 import { modelRegistry } from './ModelRegistry';
-import { askQA } from '../api/ApiService';
+
 
 const { OnnxInferenceModule } = NativeModules;
 
@@ -48,9 +48,9 @@ export const SMOLVLM2_CONFIG: SmolVlmOptimizationConfig = {
 };
 
 /**
- * Run Visual QA by trying the Backend Python Server first, and fallback to Native ONNX.
- * @param imageBase64 - base64 JPEG from smart glasses
- * @param question - user query in Vietnamese
+ * Run Visual QA fully on-device using SmolVLM2 ONNX (PRIMARY — no cloud fallback).
+ * Architecture: On-device ONNX inference is the only production path.
+ * Returns structured failure if model unavailable or inference fails.
  */
 export async function askQAOnDevice(
   imageBase64: string,
@@ -63,21 +63,7 @@ export async function askQAOnDevice(
     };
   }
 
-  // 1. Try Backend Python Server First (Because ONNX is still simulated)
-  try {
-    const apiResult = await askQA(imageBase64, question);
-    if (apiResult && apiResult.answer && apiResult.answer.trim().length > 0) {
-      return {
-        answer: apiResult.answer.trim(),
-        isSuccess: true,
-        model: 'Python-Backend-SmolVLM',
-      };
-    }
-  } catch (err) {
-    console.log('[VLM] Backend Python server not reachable, using offline VLM:', err);
-  }
-
-  // 2. Fallback to Native C++ ONNX Runtime Engine
+  // On-device Native ONNX Runtime — PRIMARY path
   try {
     if (OnnxInferenceModule && typeof OnnxInferenceModule.runVisualQA === 'function') {
       const nativeResult = await OnnxInferenceModule.runVisualQA(imageBase64, question);
@@ -92,13 +78,18 @@ export async function askQAOnDevice(
       }
     }
   } catch (err) {
-    console.warn('[VLM] Native ONNX execution warning:', err);
+    console.error('[VLM] Native ONNX inference failed:', err);
+    return {
+      answer: 'Không thể xử lý. Vui lòng thử lại.',
+      isSuccess: false,
+      model: 'error',
+    };
   }
 
-  // On-device SmolVLM2 ONNX not available and no backend reachable.
-  console.warn('[VLM] SmolVLM2 not available and no backend reachable.');
+  // On-device SmolVLM2 ONNX not available
+  console.error('[VLM] OnnxInferenceModule.runVisualQA not available on this platform/build.');
   return {
-    answer: 'Không kết nối được với máy chủ máy tính để phân tích ảnh.',
+    answer: 'Mô hình AI chưa sẵn sàng. Vui lòng thử lại.',
     isSuccess: false,
     model: 'unavailable',
   };

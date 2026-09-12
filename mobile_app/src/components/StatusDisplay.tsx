@@ -14,7 +14,7 @@ const STATE_LABELS: Record<AppState, string> = {
   [AppState.PROCESSING]: 'Đang xử lý...',
   [AppState.FEATURE_1_QA]: 'Tính năng 1 — Hỏi đáp',
   [AppState.FEATURE_2_CAPTURE]: 'Tính năng 2 — Chụp ảnh',
-  [AppState.FEATURE_3_NAVIGATION]: 'Tính năng 3 — Dẫn đường',
+  [AppState.FEATURE_3_NAVIGATION]: 'Tính năng 3 — Cảnh báo vật cản',
 };
 
 const STATE_COLORS: Record<AppState, string> = {

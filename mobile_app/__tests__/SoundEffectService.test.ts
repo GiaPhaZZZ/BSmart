@@ -22,12 +22,12 @@ jest.mock('react-native-tts', () => ({
 describe('SoundEffectService', () => {
   it('correctly defines audio clips and fallback mappings for all 3 features', () => {
     expect(FEATURE_SOUND_MAP.feature1.soundName).toBe('open_f1');
-    expect(FEATURE_SOUND_MAP.feature2.soundName).toBe('open_f4');
-    expect(FEATURE_SOUND_MAP.feature3.soundName).toBe('open_f2');
+    expect(FEATURE_SOUND_MAP.feature2.soundName).toBe('open_f2');
+    expect(FEATURE_SOUND_MAP.feature3.soundName).toBe('open_f3');
 
     expect(FEATURE_SOUND_MAP.feature1.bleCommand).toBe('CMD:PLAY_F1');
-    expect(FEATURE_SOUND_MAP.feature2.bleCommand).toBe('CMD:PLAY_F4');
-    expect(FEATURE_SOUND_MAP.feature3.bleCommand).toBe('CMD:PLAY_F2');
+    expect(FEATURE_SOUND_MAP.feature2.bleCommand).toBe('CMD:PLAY_F2');
+    expect(FEATURE_SOUND_MAP.feature3.bleCommand).toBe('CMD:PLAY_F3');
   });
 
   it('sends BLE command when connected to glasses', async () => {

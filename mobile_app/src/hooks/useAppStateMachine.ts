@@ -21,8 +21,11 @@ import {
   startBackgroundService,
   stopBackgroundService,
 } from '../services/background/ForegroundService';
-import { transcribeSpeech } from '../services/ai/OnDeviceAsrService';
-import { askQAOnDevice } from '../services/ai/OnDeviceVlmService';
+import {
+  matchVoiceCommand,
+  transcribeSpeech,
+} from '../services/ai/OnDeviceAsrService';
+import { askQA } from '../services/api/ApiService';
 import { modelRegistry } from '../services/ai/ModelRegistry';
 import { combinePcmChunksToWav } from '../services/audio/audioUtils';
 import {
@@ -73,39 +76,63 @@ function makeLog(message: string, type: LogEntry['type'] = 'info'): LogEntry {
 function matchFeatureKeyword(
   text: string,
 ): 'feature1' | 'feature2' | 'feature3' | null {
-  if (!text) return null;
-  const lower = text.toLowerCase().trim();
-  const norm = lower
+  switch (matchVoiceCommand(text)) {
+    case AppState.FEATURE_1_QA:
+      return 'feature1';
+    case AppState.FEATURE_2_CAPTURE:
+      return 'feature2';
+    case AppState.FEATURE_3_NAVIGATION:
+      return 'feature3';
+    default:
+      return null;
+  }
+}
+
+function normalizeVietnameseCommand(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
+}
 
-  if (
-    norm.includes('tinh nang 1') ||
-    norm.includes('tinh nang mot') ||
-    norm.includes('gpt') ||
-    norm.includes('hoi dap')
-  ) {
-    return 'feature1';
+function startsWithWords(words: string[], prefix: string[]): boolean {
+  if (words.length <= prefix.length) return false;
+  return prefix.every((word, index) => words[index] === word);
+}
+
+function extractNavigationDestination(text: string): string | null {
+  const originalWords = text.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+  const normalizedWords = normalizeVietnameseCommand(text).split(' ').filter(Boolean);
+
+  const prefixes = [
+    ['dan', 'duong', 'den'],
+    ['dan', 'duong', 'toi'],
+    ['chi', 'duong', 'den'],
+    ['chi', 'duong', 'toi'],
+    ['tim', 'duong', 'den'],
+    ['tim', 'duong', 'toi'],
+    ['dua', 'toi', 'den'],
+    ['dua', 'toi', 'toi'],
+    ['toi', 'muon', 'di', 'den'],
+    ['toi', 'muon', 'di', 'toi'],
+    ['muon', 'di', 'den'],
+    ['muon', 'di', 'toi'],
+    ['di', 'den'],
+    ['di', 'toi'],
+  ];
+
+  for (const prefix of prefixes) {
+    if (startsWithWords(normalizedWords, prefix)) {
+      const destination = originalWords.slice(prefix.length).join(' ').trim();
+      return destination || null;
+    }
   }
-  if (
-    norm.includes('tinh nang 2') ||
-    norm.includes('tinh nang hai') ||
-    norm.includes('chup anh') ||
-    norm.includes('chup')
-  ) {
-    return 'feature2';
-  }
-  if (
-    norm.includes('tinh nang 3') ||
-    norm.includes('tinh nang ba') ||
-    norm.includes('dan duong') ||
-    norm.includes('vat can') ||
-    norm.includes('canh bao')
-  ) {
-    return 'feature3';
-  }
+
   return null;
 }
 
@@ -158,6 +185,8 @@ export function useAppStateMachine(): AppStateMachineResult {
   const routeGuideRef = useRef<RouteGuide>(new RouteGuide());
   const lastShortPressTimeRef = useRef<number>(0);
   const lastOffRouteAnnouncedRef = useRef<number>(0);
+  const interactionVersionRef = useRef<number>(0);
+  const pendingNavigationDestinationRef = useRef<string | null>(null);
 
   const addLog = useCallback(
     (message: string, type: LogEntry['type'] = 'info') => {
@@ -178,6 +207,14 @@ export function useAppStateMachine(): AppStateMachineResult {
     [addLog],
   );
 
+  const stopAudioForRecording = useCallback(() => {
+    console.log('[Audio] Barge-in: stopping active audio before recording');
+    stopSpeaking();
+    stopFeatureSound();
+    interactionVersionRef.current += 1;
+    addLog('Đã ngắt âm thanh để bắt đầu ghi âm');
+  }, [addLog]);
+
   // ─── Navigation mode helpers ─────────────────────────────────────────
   const stopNavigation = useCallback(() => {
     if (navIntervalRef.current !== null) {
@@ -188,6 +225,8 @@ export function useAppStateMachine(): AppStateMachineResult {
     if (mockService.current) {
       mockService.current.stopAutoImage();
     }
+    pendingNavigationDestinationRef.current = null;
+    routeGuideRef.current.clearRoute();
     // Send NAV_STOP command to ESP32 to stop auto 4s camera capture
     if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
       bleService.current.sendAudio('NAV_STOP').catch(err => {
@@ -227,15 +266,19 @@ export function useAppStateMachine(): AppStateMachineResult {
 
     isProcessingFrame.current = true;
     try {
-      const { LocationService } = require('../services/location/LocationService');
       let lat: number | undefined;
       let lon: number | undefined;
-      try {
-        const loc = await LocationService.getCurrentLocation();
-        lat = loc.lat;
-        lon = loc.lon;
-      } catch (e) {
-        addLog(`GPS Error: ${e}`, 'warn');
+      const hasRoute = routeGuideRef.current.getRoute() !== null;
+
+      if (destinationText || hasRoute) {
+        const { LocationService } = require('../services/location/LocationService');
+        try {
+          const loc = await LocationService.getCurrentLocation();
+          lat = loc.lat;
+          lon = loc.lon;
+        } catch (e) {
+          addLog(`GPS Error: ${e}`, 'warn');
+        }
       }
 
       if (destinationText && lat !== undefined && lon !== undefined) {
@@ -264,14 +307,19 @@ export function useAppStateMachine(): AppStateMachineResult {
       let warningText = '';
       if (isInferenceAvailable()) {
         const inferenceResult = await runInference(imageBase64);
-        if (inferenceResult.isReady && inferenceResult.objects.length > 0) {
+        if (!inferenceResult.isReady) {
+          addLog('Nav: YOLO/ZipDepth inference chưa sẵn sàng hoặc bị lỗi', 'warn');
+        } else {
+          addLog(`Nav: YOLO detected ${inferenceResult.objects.length} object(s)`);
           warningText = warningsToVietnamese(processNavigationFrame(inferenceResult.objects));
         }
+      } else {
+        addLog('Nav: YOLO/ZipDepth inference unavailable', 'warn');
       }
 
-      // 2. Lấy hướng dẫn chỉ đường từ RouteGuide
+      // 2. Lấy hướng dẫn chỉ đường từ RouteGuide nếu user đã yêu cầu route
       let navText = '';
-      if (lat !== undefined && lon !== undefined) {
+      if (routeGuideRef.current.getRoute() && lat !== undefined && lon !== undefined) {
         const routeInfo = routeGuideRef.current.updateAndGetInstruction({ lat, lon });
         if (routeInfo.isOffRoute) {
           const now = Date.now();
@@ -309,13 +357,21 @@ export function useAppStateMachine(): AppStateMachineResult {
   const handleButtonHold = useCallback(async () => {
     const state = appStateRef.current;
     addLog('Button HOLD');
+    stopAudioForRecording();
 
-    if (state === AppState.IDLE || state === AppState.FEATURE_1_QA || state === AppState.FEATURE_3_NAVIGATION) {
+    const recordingSourceState =
+      state === AppState.PROCESSING ? previousStateRef.current : state;
+
+    if (
+      recordingSourceState === AppState.IDLE ||
+      recordingSourceState === AppState.FEATURE_1_QA ||
+      recordingSourceState === AppState.FEATURE_3_NAVIGATION
+    ) {
       const isBleConnected =
         isUsingMockBle() ||
         bleService.current?.getConnectionState() === BleConnectionState.CONNECTED;
 
-      previousStateRef.current = state;
+      previousStateRef.current = recordingSourceState;
       transitionTo(AppState.LISTENING);
       recordedAudioRef.current = null;
       capturedImageRef.current = null;
@@ -356,7 +412,7 @@ export function useAppStateMachine(): AppStateMachineResult {
           .catch(err => console.warn('[PhoneSpeech] start error:', err));
       }
     }
-  }, [addLog, transitionTo]);
+  }, [addLog, transitionTo, stopAudioForRecording]);
 
   const handleButtonRelease = useCallback(async () => {
     const state = appStateRef.current;
@@ -367,6 +423,10 @@ export function useAppStateMachine(): AppStateMachineResult {
     if (state !== AppState.LISTENING) return;
 
     transitionTo(AppState.PROCESSING);
+    const interactionVersion = interactionVersionRef.current;
+    const isCurrentProcessing = () =>
+      interactionVersion === interactionVersionRef.current &&
+      appStateRef.current === AppState.PROCESSING;
 
     // Wait for startPhoneListening promise to resolve if it is still initializing
     if (phoneListeningPromiseRef.current) {
@@ -409,6 +469,10 @@ export function useAppStateMachine(): AppStateMachineResult {
           const asrResult = await transcribeSpeech(audioData);
           question = asrResult.text;
         }
+        if (!isCurrentProcessing()) {
+          addLog('Bỏ qua kết quả hỏi đáp cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
+          return;
+        }
 
         if (!question) {
           question = 'Trước mặt tôi có gì?';
@@ -434,11 +498,28 @@ export function useAppStateMachine(): AppStateMachineResult {
           }
         }
 
-        qaImage = qaImage ?? 'MOCK_IMAGE_BASE64';
-        addLog('Running SmolVLM2 Visual QA...');
-        const onDeviceVlm = await askQAOnDevice(qaImage, question);
-        const answer = onDeviceVlm.answer;
-        addLog(`Answer: "${answer}"`);
+        if (!qaImage) {
+          throw new Error('Feature 1 VQA failed: no captured image available');
+        }
+
+        console.log('[Feature1] Camera capture ready; sending server VQA request', {
+          imageBytesApprox: Math.round((qaImage.length * 3) / 4),
+          question,
+        });
+        addLog('Camera capture ready; sending server VQA request...');
+        const serverVqa = await askQA(qaImage, question);
+        if (!isCurrentProcessing()) {
+          addLog('Bỏ qua phản hồi server cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
+          return;
+        }
+        const answer = serverVqa.answer;
+        console.log('[Feature1] Server VQA response', {
+          answer,
+          question_en: serverVqa.question_en,
+          answer_en: serverVqa.answer_en,
+          model: serverVqa.model,
+        });
+        addLog(`Server VQA response: "${answer}"`);
 
         await speakViaBle(answer, bleService.current);
         transitionTo(AppState.FEATURE_1_QA); // Stay in QA
@@ -451,13 +532,17 @@ export function useAppStateMachine(): AppStateMachineResult {
           const asrResult = await transcribeSpeech(audioData);
           destText = asrResult.text;
         }
+        if (!isCurrentProcessing()) {
+          addLog('Bỏ qua cập nhật dẫn đường cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
+          return;
+        }
         
-        if (destText) {
-          addLog(`New destination: "${destText}"`);
-          // restart nav with new destination
-          startNavigation(destText);
+        const destination = extractNavigationDestination(destText);
+        if (destination) {
+          addLog(`New destination: "${destination}"`);
+          startNavigation(destination);
         } else {
-          addLog('Không nhận diện được điểm đến mới, tiếp tục dẫn đường cũ.', 'warn');
+          addLog('Không có yêu cầu dẫn đường mới, tiếp tục cảnh báo vật cản.', 'warn');
           transitionTo(AppState.FEATURE_3_NAVIGATION);
         }
       } else {
@@ -470,6 +555,10 @@ export function useAppStateMachine(): AppStateMachineResult {
           addLog('Transcribing command using PhoWhisper ASR...');
           const asrResult = await transcribeSpeech(audioData);
           text = asrResult.text;
+        }
+        if (!isCurrentProcessing()) {
+          addLog('Bỏ qua lệnh cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
+          return;
         }
         addLog(`Transcribed: "${text}"`);
 
@@ -487,22 +576,34 @@ export function useAppStateMachine(): AppStateMachineResult {
         if (feature === 'feature1') {
           transitionTo(AppState.FEATURE_1_QA);
           await playFeatureActivationSound('feature1', bleService.current);
-          await speakViaBle('Đã bật tính năng hỏi đáp. Hãy nhấn giữ nút để đặt câu hỏi.', bleService.current);
+          if (appStateRef.current === AppState.FEATURE_1_QA) {
+            await speakViaBle('Đã bật tính năng hỏi đáp. Hãy nhấn giữ nút để đặt câu hỏi.', bleService.current);
+          }
         } else if (feature === 'feature2') {
           transitionTo(AppState.FEATURE_2_CAPTURE);
           await playFeatureActivationSound('feature2', bleService.current);
-          // Feature 2: capture + save
-          await captureAndSave();
+          if (appStateRef.current === AppState.FEATURE_2_CAPTURE) {
+            // Feature 2: capture + save
+            await captureAndSave();
+          }
         } else if (feature === 'feature3') {
+          const destination = extractNavigationDestination(text);
           transitionTo(AppState.FEATURE_3_NAVIGATION);
           await playFeatureActivationSound('feature3', bleService.current);
-          startNavigation(text);
+          if (appStateRef.current === AppState.FEATURE_3_NAVIGATION) {
+            startNavigation(destination ?? undefined);
+          }
         }
       }
     } catch (e: any) {
+      if (!isCurrentProcessing()) {
+        addLog('Bỏ qua lỗi từ lượt xử lý cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
+        return;
+      }
+      console.error('[Feature1] Processing error:', e?.message ?? e);
       addLog(`Processing error: ${e?.message ?? e}`, 'error');
       await speakViaBle(
-        'Không thể xử lý yêu cầu, vui lòng thử lại',
+        'Không thể xử lý. Vui lòng thử lại.',
         bleService.current,
       ).catch(() => {});
       transitionTo(AppState.IDLE);
@@ -575,6 +676,16 @@ export function useAppStateMachine(): AppStateMachineResult {
   function startNavigation(destinationText?: string) {
     stopNavigation();
     resetCooldowns();
+    const destination = destinationText?.trim() || null;
+    pendingNavigationDestinationRef.current = destination;
+    if (!destination) {
+      routeGuideRef.current.clearRoute();
+    }
+    console.log('[Feature3] startNavigation', {
+      mode: destination ? 'route' : 'obstacle',
+      destination,
+    });
+
     if (mockService.current && isUsingMockBle()) {
       mockService.current.startAutoImage(NAVIGATION_FRAME_INTERVAL_MS);
     } else if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
@@ -584,12 +695,18 @@ export function useAppStateMachine(): AppStateMachineResult {
       });
     } else {
       // Standalone phone navigation using phone camera
-      addLog('Bắt đầu dẫn đường độc lập bằng Camera điện thoại (4s/khung hình)...');
+      addLog(
+        destination
+          ? `Bắt đầu dẫn đường đến "${destination}" bằng Camera điện thoại (4s/khung hình)...`
+          : 'Bắt đầu cảnh báo vật cản bằng Camera điện thoại (4s/khung hình)...',
+      );
       capturePhonePhoto()
         .then(photo => {
           if (photo && appStateRef.current === AppState.FEATURE_3_NAVIGATION) {
             setCurrentImage(photo);
-            processNavigationImage(photo, destinationText);
+            const pendingDestination = pendingNavigationDestinationRef.current ?? undefined;
+            pendingNavigationDestinationRef.current = null;
+            processNavigationImage(photo, pendingDestination);
           }
         })
         .catch(err => {
@@ -627,7 +744,7 @@ export function useAppStateMachine(): AppStateMachineResult {
     
     // Announce app is ready
     setTimeout(() => {
-       speakUrgent('Ứng dụng BSmart đã sẵn sàng. Bạn có thể nhấn giữ nút để ra lệnh.', bleService.current).catch(() => {});
+       speakUrgent('Ứng dụng BSmart đã sẵn sàng. Bạn có thể nhấn giữ nút để ra lệnh chọn tính năng. Nhấn 2 lần để về trang chủ.', bleService.current).catch(() => {});
     }, 1000);
 
     const svc = bleService.current;
@@ -647,7 +764,9 @@ export function useAppStateMachine(): AppStateMachineResult {
       capturedImageRef.current = imageBase64;
 
       if (appStateRef.current === AppState.FEATURE_3_NAVIGATION) {
-        processNavigationImage(imageBase64);
+        const pendingDestination = pendingNavigationDestinationRef.current ?? undefined;
+        pendingNavigationDestinationRef.current = null;
+        processNavigationImage(imageBase64, pendingDestination);
       }
     });
 

@@ -16,6 +16,7 @@ export interface MapboxStep {
     instruction: string;
     type: string;
     modifier?: string;
+    location?: [number, number];
   };
   distance: number;
   duration: number;

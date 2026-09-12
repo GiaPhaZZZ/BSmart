@@ -8,7 +8,7 @@
  * chưa có module ONNX native. Ở đây giữ lại API_BASE_URL để code không lỗi.
  */
 
-export const API_BASE_URL = 'http://192.168.1.100:8000';
+export const API_BASE_URL = 'https://reprimand-ambiguous-founder.ngrok-free.dev';
 
 export const API_ENDPOINTS = {
   TRANSCRIBE: `${API_BASE_URL}/transcribe`,
@@ -16,3 +16,4 @@ export const API_ENDPOINTS = {
 };
 
 export const API_TIMEOUT_MS = 1500;
+export const API_VQA_TIMEOUT_MS = 90000;

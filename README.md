@@ -8,11 +8,12 @@ A lightweight, high-performance multimodal AI system designed for smart glasses 
 
 | Feature | Model Stack | Operational Mode | Description |
 | :--- | :--- | :--- | :--- |
-| **Function 0 — Voice Control** | `PhoWhisper-tiny (CT2 INT8)` | On-Demand | Speech-to-text voice command recognition & feature activation |
-| **Function 1 — Visual QA Chatbot** | `PhoWhisper` + `EnViT5` + `SmolVLM2` + `Piper TTS` | One-Shot | Multimodal Q&A on captured environment images via spoken questions |
-| **Function 2 — Autopilot Guide** | `YOLO26s` + `ZipDepth` + `Piper TTS` | Continuous (1-5s) | Real-time object detection, 3-column terrain depth estimation & audio warning |
-| **FastAPI Backend Server** | `FastAPI` + `Uvicorn` | Service | RESTful API server bridging Smart Glasses & Mobile App |
-| **Mobile App (React Native)** | `ONNX Runtime Native C++` | Standalone / Hybrid | On-device inference & voice interface for smart glasses |
+| **Function 0 — Voice Control** | `PhoWhisper-tiny ONNX` + Android SpeechRecognizer fallback | On-Demand | Speech-to-text voice command recognition & feature activation |
+| **Function 1 — Visual QA Chatbot** | `SmolVLM2 ONNX` + Android TTS | One-Shot | Offline multimodal Q&A on captured environment images via spoken questions |
+| **Function 2 — Photo Capture** | ESP32-S3 camera / phone camera fallback | One-Shot | Capture and save a local JPEG image, then return to `IDLE` |
+| **Function 3 — Navigation / Obstacle Awareness** | `YOLO26s ONNX` + `ZipDepth ONNX` + Android TTS | Continuous (4s/frame) | Real-time object detection, relative depth warning, and optional destination-aware guidance |
+| **FastAPI Backend Server** | `FastAPI` + `Uvicorn` | Dev / Reference | REST API wrapper for local workstation testing; not required for the offline Android runtime |
+| **Mobile App (React Native)** | `ONNX Runtime Android` + Native Kotlin modules | Standalone Offline | On-device inference, BLE control, voice UI, and smart-glasses state machine |
 
 ---
 
@@ -21,11 +22,11 @@ A lightweight, high-performance multimodal AI system designed for smart glasses 
 ```text
 BSmart/
 ├── backend/                     # Python FastAPI Backend & AI Pipelines
-│   ├── server.py                # FastAPI REST server for Mobile App integration
+│   ├── server.py                # FastAPI REST server for workstation/reference testing
 │   ├── pipelines/               # Core multimodal processing pipelines
 │   │   ├── voice_control.py     # Voice command recognition & activation
 │   │   ├── visual_qa.py         # Visual QA multimodal chatbot pipeline
-│   │   └── autopilot.py         # Autopilot obstacle detection & depth guidance
+│   │   └── autopilot.py         # Reference obstacle detection & depth guidance
 │   ├── scripts/                 # Utility, setup & diagnostic scripts
 │   │   ├── check_glass.py       # 11/11 Sanity & inference verifier
 │   │   ├── download_models.py   # Pretrained AI models downloader
@@ -35,15 +36,13 @@ BSmart/
 │   └── requirements.txt         # Python dependencies
 │
 ├── mobile_app/                  # React Native mobile application
-│   ├── android/                 # Android project with ONNX Runtime Native
+│   ├── android/                 # Android project with ONNX Runtime and native Kotlin modules
 │   ├── src/                     # UI components, state machine & inference services
 │   └── scripts/                 # Icon generation & dependency patches
 │
 ├── firmware/                    # Smart Glasses ESP32-S3 hardware code
 ├── ai_core/                     # ONNX model export & packaging scripts
-├── models/                      # Pretrained weights & model checkpoints (Git Ignored)
 ├── assets/                      # App icons (icon.svg) & sound clips (Open_f1..f4.mp3)
-├── release/                     # Packaged standalone APK outputs (BSmart.apk)
 ├── docs/                        # Architecture & documentation
 ├── test/                        # Test photos & audio clips
 └── start_backend.bat            # One-click Windows backend server startup
@@ -162,12 +161,37 @@ Export lightweight models to Android assets:
 python ai_core/package_models.py
 ```
 
-### 2. Build Release APK (Standalone)
+### 2. Build Debug APK (Standalone Offline)
+```powershell
+cd mobile_app/android
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/BSmart.apk
+```
+
+### 3. Build Release APK (Standalone)
 ```bash
 cd mobile_app
 npx react-native build-android --mode=release
 ```
 *Output APK location:* `mobile_app/android/app/build/outputs/apk/release/app-release.apk`
+
+### Android Runtime Notes
+
+- ONNX models are packaged in Android assets, then streamed with a 64 KB buffer into the app sandbox at runtime: `filesDir/onnx_models/<model filename>`.
+- Model files are cached and only recopied when the extracted file size differs from the asset size.
+- ONNX Runtime sessions are created from file paths, not in-memory `ByteArray`s, to avoid heap spikes when loading large models such as `smolvlm2_decoder.onnx`.
+- Sessions are lazy-loaded per active feature and inactive groups can be released through `releaseObjectDetectionModels()`, `releaseVlmModels()`, and `releaseAsrModels()`.
+- `android:largeHeap="true"` is not used as the primary memory fix.
+
+### Voice Command Aliases
+
+Voice command matching is accent-insensitive and supports common ASR variants:
+
+| Feature | Accepted examples |
+| :--- | :--- |
+| Feature 1 — QA | `1`, `số 1`, `một`, `số một`, `tính năng 1`, `tính năng một`, `tính năng số 1`, `tính năng số một`, `hỏi đáp`, `gpt` |
+| Feature 2 — Capture | `2`, `số 2`, `hai`, `số hai`, `tính năng 2`, `tính năng hai`, `tính năng số 2`, `tính năng số hai`, `tính năng hay`, `tính năng số hay`, `chụp ảnh` |
+| Feature 3 — Navigation | `3`, `số 3`, `ba`, `số ba`, `tính năng 3`, `tính năng ba`, `tính năng số 3`, `tính năng số ba`, `tìm đường`, `dẫn đường` |
 
 ---
 
@@ -192,6 +216,6 @@ python backend/pipelines/voice_control.py --audio test/audio/mo_tinh_nang.mp3
 # Function 1: Visual QA Chatbot Test
 python backend/pipelines/visual_qa.py --image test/photo/road.jpg --audio test/audio/mieu_ta_khung_canh.mp3 --out out.wav
 
-# Function 2: Autopilot Navigation Test
+# Function 3 reference: Autopilot Navigation Test
 python backend/pipelines/autopilot.py --image test/photo/road.jpg --audio guide.wav
 ```

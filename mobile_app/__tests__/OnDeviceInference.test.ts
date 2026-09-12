@@ -82,7 +82,7 @@ describe('OnDeviceInference Service (MOD-03 & MOD-04)', () => {
     expect(warnings.length).toBeGreaterThan(0);
 
     const speechText = warningsToVietnamese(warnings);
-    expect(speechText).toContain('Lưu ý');
+    expect(speechText).toContain('Chú ý');
     expect(speechText.length).toBeGreaterThan(10);
   });
 });
@@ -109,6 +109,40 @@ describe('OnDeviceAsrService (MOD-01)', () => {
     expect(matchVoiceCommand('bật chế độ dẫn đường')).toBe(AppState.FEATURE_3_NAVIGATION);
   });
 
+  test.each([
+    ['1', AppState.FEATURE_1_QA],
+    ['s\u1ed1 1', AppState.FEATURE_1_QA],
+    ['m\u1ed9t', AppState.FEATURE_1_QA],
+    ['s\u1ed1 m\u1ed9t', AppState.FEATURE_1_QA],
+    ['t\u00ednh n\u0103ng 1', AppState.FEATURE_1_QA],
+    ['t\u00ednh n\u0103ng m\u1ed9t', AppState.FEATURE_1_QA],
+    ['t\u00ednh n\u0103ng s\u1ed1 m\u1ed9t', AppState.FEATURE_1_QA],
+    ['t\u00ednh n\u0103ng s\u1ed1 1', AppState.FEATURE_1_QA],
+    ['h\u1ecfi \u0111\u00e1p', AppState.FEATURE_1_QA],
+    ['gpt', AppState.FEATURE_1_QA],
+    ['2', AppState.FEATURE_2_CAPTURE],
+    ['hai', AppState.FEATURE_2_CAPTURE],
+    ['s\u1ed1 2', AppState.FEATURE_2_CAPTURE],
+    ['s\u1ed1 hai', AppState.FEATURE_2_CAPTURE],
+    ['ch\u1ee5p \u1ea3nh', AppState.FEATURE_2_CAPTURE],
+    ['t\u00ednh n\u0103ng 2', AppState.FEATURE_2_CAPTURE],
+    ['t\u00ednh n\u0103ng s\u1ed1 2', AppState.FEATURE_2_CAPTURE],
+    ['t\u00ednh n\u0103ng s\u1ed1 hai', AppState.FEATURE_2_CAPTURE],
+    ['t\u00ednh n\u0103ng hay', AppState.FEATURE_2_CAPTURE],
+    ['t\u00ednh n\u0103ng s\u1ed1 hay', AppState.FEATURE_2_CAPTURE],
+    ['3', AppState.FEATURE_3_NAVIGATION],
+    ['ba', AppState.FEATURE_3_NAVIGATION],
+    ['s\u1ed1 3', AppState.FEATURE_3_NAVIGATION],
+    ['s\u1ed1 ba', AppState.FEATURE_3_NAVIGATION],
+    ['t\u00ednh n\u0103ng 3', AppState.FEATURE_3_NAVIGATION],
+    ['t\u00ednh n\u0103ng s\u1ed1 3', AppState.FEATURE_3_NAVIGATION],
+    ['t\u00ednh n\u0103ng ba', AppState.FEATURE_3_NAVIGATION],
+    ['t\u00ednh n\u0103ng s\u1ed1 ba', AppState.FEATURE_3_NAVIGATION],
+    ['t\u00ecm \u0111\u01b0\u1eddng', AppState.FEATURE_3_NAVIGATION],
+  ])('matchVoiceCommand recognizes recording alias "%s"', (text, expected) => {
+    expect(matchVoiceCommand(text)).toBe(expected);
+  });
+
   test('matchVoiceCommand returns null on unknown text', () => {
     expect(matchVoiceCommand('hôm nay trời đẹp quá')).toBeNull();
   });
@@ -131,7 +165,7 @@ describe('OnDeviceVlmService (MOD-02)', () => {
   test('askQAOnDevice returns honest unavailable status when model is uninitialized', async () => {
     const res = await askQAOnDevice('mockImage', 'Trước mặt tôi là gì?');
     expect(res.isSuccess).toBe(false);
-    expect(res.answer).toContain('Không thể xử lý hình ảnh lúc này');
+    expect(res.answer).toContain('Mô hình AI chưa sẵn sàng');
   });
 
   test('askQAOnDevice returns offline unavailable message when model is READY but native module absent', async () => {

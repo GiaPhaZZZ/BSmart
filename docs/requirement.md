@@ -72,14 +72,17 @@ Toàn bộ các mô hình AI được chuyển trực tiếp vào trong App đi�
 ### 2.3 Kiến trúc xử lý On-Device & Lưu trữ
 
 - **Xử lý AI On-Device (Full Offline):**
-  - Toàn bộ pipeline AI được đóng gói vào App Android, chạy thông qua runtime mobile tối ưu (ONNX Runtime Mobile, CTranslate2 INT8, TFLite hoặc ExecuTorch).
+  - Toàn bộ pipeline AI được đóng gói vào App Android, chạy thông qua ONNX Runtime Android và các native module Kotlin.
   - Trọng số model được lượng tử hóa (INT8 / FP16) để vừa vặn trong dung lượng bộ nhớ điện thoại (tổng dung lượng APK kèm model ~2GB).
-  - *PhoWhisper-tiny*: Nhận diện giọng nói offline (tính năng 0 & 1).
-  - *SmolVLM2*: Mô hình thị giác - ngôn ngữ nhỏ gọn, trả lời câu hỏi về hình ảnh offline (tính năng 1).
+  - *PhoWhisper-tiny / Android SpeechRecognizer*: Nhận diện giọng nói offline hoặc local-device (tính năng 0 & 1).
+  - *SmolVLM2*: Mô hình thị giác - ngôn ngữ nhỏ gọn, trả lời câu hỏi về hình ảnh offline (tính năng 1) qua `OnnxInferenceModule.runVisualQA`.
   - *YOLO26s + ZipDepth*: Nhận diện vật thể và ước lượng độ sâu tương đối theo thời gian thực (tính năng 3).
+  - Các model ONNX lớn không được load bằng `assets.open(...).readBytes()`; Android runtime stream asset bằng buffer 64 KB vào `filesDir/onnx_models/<model filename>`, cache theo kích thước file, rồi tạo session bằng `OrtEnvironment.createSession(file.absolutePath, options)`.
+  - Session được lazy-load theo nhóm tính năng và có hàm release riêng: `releaseObjectDetectionModels()`, `releaseVlmModels()`, `releaseAsrModels()`. Khi bộ nhớ còn ít, app giải phóng session không hoạt động trước khi mở nhóm model lớn khác.
 - **Lưu trữ:**
   - Ảnh chụp ở tính năng 2: lưu local trên bộ nhớ điện thoại (Gallery / Internal Storage).
   - Dữ liệu âm thanh và frame dẫn đường: xử lý trực tiếp trong RAM / bộ nhớ đệm tạm thời, giải phóng ngay sau khi inference hoàn tất.
+  - File model đã extract được lưu trong sandbox app (`filesDir/onnx_models`) để tránh copy lại ở lần chạy sau nếu kích thước khớp asset.
   - Không cần database, không cần tài khoản người dùng, không cần đồng bộ mạng.
   - Log: lưu tạm trong React state của phiên chạy app, hiển thị trực quan trên màn hình qua `DebugLog`.
 
@@ -130,9 +133,9 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
 
    | Lời nói nhận diện | Mã tính năng | Âm thanh kích hoạt (Sound) | Lệnh BLE (App → Kính) | TTS Fallback xác nhận |
    | :--- | :---: | :---: | :---: | :--- |
-   | "tính năng 1", "tính năng một", "hỏi đáp", "gpt", "miêu tả" | `FEATURE_1_QA` | `Open_f1.mp3` | `CMD:PLAY_F1` | "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng" |
-   | "tính năng 2", "tính năng hai", "chụp ảnh" | `FEATURE_2_CAPTURE` | `Open_f4.mp3` | `CMD:PLAY_F4` | "Đã vào tính năng 2, chụp ảnh" |
-   | "tính năng 3", "tính năng ba", "dẫn đường", "tự động", "đi bộ" | `FEATURE_3_NAVIGATION` | `Open_f2.mp3` | `CMD:PLAY_F2` | "Đã vào tính năng 3, chế độ dẫn đường" |
+   | "1", "số 1", "một", "số một", "tính năng 1", "tính năng một", "tính năng số 1", "tính năng số một", "hỏi đáp", "gpt" | `FEATURE_1_QA` | `Open_f1.mp3` | `CMD:PLAY_F1` | "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng" |
+   | "2", "số 2", "hai", "số hai", "tính năng 2", "tính năng hai", "tính năng số 2", "tính năng số hai", "tính năng hay", "tính năng số hay", "chụp ảnh" | `FEATURE_2_CAPTURE` | `Open_f4.mp3` | `CMD:PLAY_F4` | "Đã vào tính năng 2, chụp ảnh" |
+   | "3", "số 3", "ba", "số ba", "tính năng 3", "tính năng ba", "tính năng số 3", "tính năng số ba", "tìm đường", "dẫn đường" | `FEATURE_3_NAVIGATION` | `Open_f2.mp3` | `CMD:PLAY_F2` | "Đã vào tính năng 3, chế độ dẫn đường" |
 
    - Không khớp keyword nào → phát lại "Không nhận diện được lệnh, vui lòng thử lại" và quay về `IDLE`.
 
@@ -142,24 +145,25 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
 
 1. **Vào tính năng:** Đang ở `FEATURE_1_QA`, đã phát âm thanh kích hoạt `Open_f1.mp3` (bắn lệnh BLE `CMD:PLAY_F1` sang kính, TTS fallback: "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng").
 2. **Hỏi đáp tương tác:** User nhấn giữ nút Ghi âm và nói câu hỏi (Push-to-talk) → kính stream audio mic I2S. Khi thả tay, kính chụp ngay 1 ảnh quang cảnh JPEG (320×240 QVGA) và gửi cả hai qua BLE về App.
-3. **Chuyển giọng nói thành văn bản (STT):** App xử lý audio qua model PhoWhisper-tiny on-device (CTranslate2 INT8) → nhận về text câu hỏi tiếng Việt.
+3. **Chuyển giọng nói thành văn bản (STT):** App ưu tiên transcript từ mic điện thoại Android khi chạy độc lập; khi có audio BLE từ kính thì xử lý qua PhoWhisper on-device → nhận về text câu hỏi tiếng Việt.
 4. **Pipeline Xử lý Hỏi đáp Đa phương thức (AI Core):**
-   - **Bước 1 (Dịch xuôi):** Model **EnViT5** (`VietAI/envit5-translation` CT2 INT8) dịch text câu hỏi Tiếng Việt → Tiếng Anh.
-   - **Bước 2 (Visual QA):** Model **SmolVLM2** (`SmolVLM2-256M-Video-Instruct` on-device) tiếp nhận đồng thời [Ảnh từ kính + Câu hỏi Tiếng Anh], phân tích bối cảnh hình ảnh và sinh ra câu trả lời ngắn gọn (~1 câu súc tích) bằng Tiếng Anh.
-   - **Bước 3 (Dịch ngược):** Model **EnViT5** dịch câu trả lời Tiếng Anh → Tiếng Việt hoàn chỉnh.
-5. **Tổng hợp giọng nói (TTS):** App chuyển text trả lời tiếng Việt sang giọng nói qua `react-native-tts` (trên Mobile) hoặc `Piper TTS` (trên Python Server) → truyền dữ liệu audio về kính qua BLE Characteristic `AUDIO_OUT` để phát ở loa kính (chế độ MVP fallback phát qua loa ngoài điện thoại).
+   - **Android production path:** `OnDeviceVlmService.ts` gọi native `OnnxInferenceModule.runVisualQA(imageBase64, question)`.
+   - **Native runtime:** `OnnxInferenceModule.kt` chạy pipeline SmolVLM2 HF ONNX gồm vision encoder, token embedding, merge image embeddings, decoder prefill và autoregressive generation bằng KV-cache.
+   - **Quản lý bộ nhớ:** trước khi VLM chạy, app có thể release các session không hoạt động (`YOLO26s`, `ZipDepth`, `PhoWhisper`) nếu bộ nhớ còn ít; model VLM được load từ file đã extract trong `filesDir/onnx_models`, không load toàn bộ ONNX vào heap bằng `readBytes()`.
+   - **Lỗi runtime:** không hardcode câu trả lời giả; nếu inference lỗi, app giữ thông báo người dùng "Không thể xử lý. Vui lòng thử lại." và log lỗi native đầy đủ.
+5. **Tổng hợp giọng nói (TTS):** App chuyển text trả lời tiếng Việt sang giọng nói qua `react-native-tts` → mục tiêu truyền dữ liệu audio về kính qua BLE Characteristic `AUDIO_OUT` để phát ở loa kính (chế độ MVP fallback phát qua loa ngoài điện thoại).
 6. **Sau khi trả lời xong:** Hệ thống giữ nguyên trạng thái chờ trong `FEATURE_1_QA` để user có thể tiếp tục nhấn giữ hỏi câu tiếp theo, hoặc nhấn nhanh nút Ghi âm (≤ 300ms) để thoát về `IDLE`.
 
 **Ví dụ:**
 - Input: Ảnh phía trước + audio "Trước mặt tôi là gì"
-- Pipeline: PhoWhisper ("Trước mặt tôi là gì") → EnViT5 ("What is in front of me?") → SmolVLM2 ("A street with parked cars and a pedestrian crossing.") → EnViT5 ("Một con phố với ô tô đang đỗ và lối qua đường cho người đi bộ.")
+- Pipeline Android: transcript tiếng Việt ("Trước mặt tôi là gì") + ảnh JPEG → SmolVLM2 ONNX (`runVisualQA`) → câu trả lời ngắn → TTS tiếng Việt.
 - Output (giọng nói): "Một con phố với ô tô đang đỗ và lối qua đường cho người đi bộ."
 
 ---
 
 ## 6. Tính năng 2: Chụp ảnh (Photo Capture & Storage)
 
-1. **Kích hoạt:** User nói "tính năng 2" hoặc "chụp ảnh" từ `IDLE` → chuyển sang `FEATURE_2_CAPTURE`.
+1. **Kích hoạt:** User nói "tính năng 2", "tính năng hai", "tính năng hay", "số 2", "hai" hoặc "chụp ảnh" từ `IDLE` → chuyển sang `FEATURE_2_CAPTURE`.
 2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f4.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F4`** sang kính; TTS fallback: "Đã vào tính năng 2, chụp ảnh").
 3. **Chụp & Truyền ảnh:**
    - App gửi lệnh điều khiển BLE **`CAPTURE`** qua Characteristic `AUDIO_OUT` sang kính.
@@ -176,7 +180,7 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
 
 > **Lưu ý phạm vi:** Đây **không phải** dẫn đường GPS bản đồ (không GPS, không map turn-by-turn). Trong MVP, tính năng này là **nhận thức và cảnh báo vật cản theo thời gian thực (Real-time Obstacle & Depth Awareness)**.
 
-1. **Kích hoạt:** User nói "tính năng 3" hoặc "dẫn đường" từ `IDLE` → chuyển sang `FEATURE_3_NAVIGATION`.
+1. **Kích hoạt:** User nói "tính năng 3", "tính năng ba", "số 3", "ba", "tìm đường" hoặc "dẫn đường" từ `IDLE` → chuyển sang `FEATURE_3_NAVIGATION`.
 2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f2.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F2`** sang kính; TTS fallback: "Đã vào tính năng 3, chế độ dẫn đường").
 3. **Vòng lặp tự động (Auto-pilot Loop):**
    - App gửi lệnh điều khiển BLE **`NAV_START`** sang kính.
@@ -330,10 +334,12 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **APP-14** | **Mobile App** | Luồng điều khiển vận hành Kính (App $\to$ ESP32) | Gửi các lệnh `NAV_START` (chu kỳ 4s), `NAV_STOP` (dừng chụp), `CAPTURE` (chụp ảnh đơn) qua `AUDIO_OUT_CHAR_UUID` điều khiển camera kính | ✅ **Hoàn thành** |
 | **APP-15** | **Mobile App** | Tích lũy Audio Chunk & Tích hợp PhoWhisper | Nối chuỗi PCM Base64 chunks từ ESP32 BLE thành WAV 16kHz chuẩn (`audioUtils.ts`), tích hợp PhoWhisper nhận diện giọng nói tiếng Việt thực tế | ✅ **Hoàn thành** |
 | **APP-16** | **Mobile App** | Dịch vụ Âm thanh Kích hoạt & Lệnh Trigger BLE | Tích hợp `SoundEffectService.ts` phát file âm thanh `Open_f1.mp3`, `Open_f4.mp3`, `Open_f2.mp3` qua `AudioPlayerModule` và gửi lệnh BLE `CMD:PLAY_F1`, `CMD:PLAY_F4`, `CMD:PLAY_F2` (đã pass test) | ✅ **Hoàn thành** |
+| **APP-17** | **Mobile App** | Mở rộng alias lệnh ghi âm tiếng Việt | `OnDeviceAsrService.ts` chuẩn hóa bỏ dấu và nhận các alias như "tính năng hay", "tính năng số hay", "tìm đường", số/một/hai/ba để mở đúng feature | ✅ **Hoàn thành** |
 | **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_phowhisper_onnx.py`, tích hợp `OnDeviceAsrService.ts` nhận diện giọng nói 100% offline | ✅ **Hoàn thành** |
-| **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Xây dựng `ai_core/export_smolvlm2_onnx.py`, tích hợp `SmolVLM2-256M` on-device với gói tối ưu hóa (On-demand, 256x256, max 35 tokens, INT8, async non-blocking, tensor recycling) trong `OnDeviceVlmService.ts` & `OnnxInferenceModule.kt` | ✅ **Hoàn thành** |
+| **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Xây dựng `ai_core/export_smolvlm2_onnx.py`, tích hợp `SmolVLM2-256M` on-device với native HF ONNX pipeline (vision encoder, token embedding, image embedding merge, decoder prefill/generation, KV-cache, async non-blocking, tensor/result recycling) trong `OnDeviceVlmService.ts` & `OnnxInferenceModule.kt` | ✅ **Hoàn thành** |
 | **MOD-03** | **AI On-Device** | Export YOLO26s + ZipDepth sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_yolo_zipdepth_onnx.py`, trích xuất mô hình phát hiện vật cản và ước lượng độ sâu làn đường | ✅ **Hoàn thành** |
-| **MOD-04** | **AI On-Device** | Đóng gói bộ Model Weights vào Android APK (~2GB) | Xây dựng `ai_core/package_models.py`, tích hợp C++ Native ONNX Runtime (`OnnxInferenceModule.kt`), build thành công APK Android (`BUILD SUCCESSFUL`) | ✅ **Hoàn thành** |
+| **MOD-04** | **AI On-Device** | Đóng gói bộ Model Weights vào Android APK (~2GB) | Xây dựng `ai_core/package_models.py`, tích hợp ONNX Runtime Android (`OnnxInferenceModule.kt`), extract model asset bằng streaming 64 KB vào `filesDir/onnx_models`, tạo session từ file path và build thành công APK Android (`BUILD SUCCESSFUL`) | ✅ **Hoàn thành** |
+| **MOD-06** | **AI On-Device** | Quản lý vòng đời ONNX sessions và bộ nhớ runtime | Thêm lazy-load theo feature, `releaseObjectDetectionModels()`, `releaseVlmModels()`, `releaseAsrModels()`, đóng `OrtSession.Result`/`OnnxTensor` sau khi dùng, loại bỏ OOM do `assets.open(...).readBytes()` | ✅ **Hoàn thành** |
 | **MOD-05** | **AI On-Device** | Tích hợp Mô hình Dịch thuật Song ngữ EnViT5 | Lượng tử hóa `VietAI/envit5-translation` (CT2 INT8 / ONNX) làm cầu nối ngữ nghĩa 2 chiều Việt $\leftrightarrow$ Anh phục vụ chu trình VLM SmolVLM2 | ✅ **Hoàn thành** |
 | **FW-01** | **Firmware** | Source code C/C++ cho ESP32-S3 Sense (Arduino IDE/ESP-IDF) | Mã nguồn nạp vi điều khiển, quản lý I/O và cấu hình BLE Server (`firmware/esp32_sense/bsmart_esp32_sense.ino`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-02** | **Firmware** | Điều khiển Camera (OV2640/OV5640) nén JPEG | Chụp ảnh độ phân giải 320x240 / 640x480, nén dung lượng ≤ 50–100 KB, phân mảnh gói BLE (`seq:total:payload`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
@@ -360,7 +366,9 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **Luồng điều khiển vận hành Kính (App $\to$ ESP32)** | 🟢 **Resolved** | Kính tự động chụp định kỳ 4s khi dẫn đường | Đã gửi lệnh `NAV_START`, `NAV_STOP`, `CAPTURE` qua Bluetooth điều khiển camera kính theo đúng trạng thái của App. |
 | **Nút Bluetooth chưa kết nối thực tế** | 🟢 **Resolved** | Quét và kết nối Bluetooth Low Energy thực tế | Đã cấu hình Real BLE làm mặc định, tự động xin quyền runtime `BLUETOOTH_SCAN/CONNECT` và khai báo trong Manifest. |
 | **Chưa có giao thức BLE Audio Pipe** | ⚠️ **Blocker** | Kính chưa tự phát được âm thanh ra loa | Phần cứng kính hiện tại chưa có module I2S DAC/Loa ngoài; Mobile app dùng `react-native-tts` phát qua loa ngoài điện thoại làm fallback. |
-| **Đóng gói Model On-Device (~2GB)** | 🟢 **Resolved** | App chạy hoàn toàn offline trên điện thoại | Đã tích hợp ONNX Runtime Native C++ (`OnnxInferenceModule.kt`) và tối ưu On-Demand SmolVLM2 + PhoWhisper + YOLO26s + ZipDepth trực tiếp trong mã nguồn APK. |
+| **Đóng gói Model On-Device (~2GB)** | 🟢 **Resolved** | App chạy hoàn toàn offline trên điện thoại | Đã tích hợp ONNX Runtime Android (`OnnxInferenceModule.kt`) và tối ưu On-Demand SmolVLM2 + PhoWhisper + YOLO26s + ZipDepth trực tiếp trong mã nguồn APK. |
+| **OOM khi load model ONNX lớn từ Android assets** | 🟢 **Resolved** | SmolVLM2 decoder không còn bị heap spike do đọc toàn bộ file ONNX vào `ByteArray` | Đã thay `assets.open(...).readBytes()` bằng streaming copy 64 KB vào `filesDir/onnx_models`, cache theo size, rồi `createSession(file.absolutePath, options)`. |
+| **Bundle Android cũ không nhận alias "tính năng hay"** | 🟢 **Resolved** | Lệnh Feature 2 từ ASR variant "hay" được tài liệu hóa và matcher source hỗ trợ | Cần build/cài APK mới sau khi cập nhật JS bundle; matcher hiện có alias `tinh nang hay` và regression test trong `OnDeviceInference.test.ts`. |
 | **Người khiếm thị khó tự thao tác mở app** | ♿ **UX Lim.** | Người mù không thể tự tìm và bấm mở app | Đã bổ sung `BleAutoConnectService.ts` tự động quét/kết nối lại ngầm khi kính bật nguồn; hỗ trợ phản hồi rung haptic và giọng nói. |
 | **Chưa tích hợp bản đồ định vị GPS** | ♿ **UX Lim.** | Chỉ cảnh báo vật thể trước mắt, không chỉ đường | Nêu rõ trong phạm vi: Tính năng 3 là **Obstacle Awareness (Tránh vật cản)**, không phải GPS Turn-by-turn. |
 | **Giới hạn băng thông BLE của ESP32** | ⚙️ **HW Lim.** | Dữ liệu ảnh/audio lớn dễ bị trễ hoặc rớt gói | Nén ảnh JPEG nhỏ (≤ 50–100 KB), bỏ qua frame trễ (skip frame), chỉ xử lý 1 frame tại một thời điểm. |

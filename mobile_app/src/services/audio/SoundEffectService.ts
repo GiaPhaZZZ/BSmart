@@ -4,8 +4,8 @@
  *
  * Mappings:
  *   - feature1 (Hỏi đáp / Chatbot) -> open_f1.mp3
- *   - feature2 (Chụp ảnh)         -> open_f4.mp3
- *   - feature3 (Dẫn đường/Auto)   -> open_f2.mp3
+ *   - feature2 (Chụp ảnh)         -> open_f2.mp3
+ *   - feature3 (Cảnh báo vật cản) -> open_f3.mp3
  *
  * Protocol:
  *   - If connected via BLE, sends audio trigger command to peripheral.
@@ -40,7 +40,7 @@ export const FEATURE_SOUND_MAP: Record<FeatureKey, FeatureSoundConfig> = {
   },
   feature3: {
     soundName: 'open_f3',
-    fallbackText: 'Đã vào tính năng 3, chế độ dẫn đường',
+    fallbackText: 'Đã vào tính năng 3, chế độ cảnh báo vật cản',
     bleCommand: 'CMD:PLAY_F3',
   },
 };

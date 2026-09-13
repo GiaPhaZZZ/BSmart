@@ -152,12 +152,15 @@ describe('NavigationEngine', () => {
     expect(text).toContain('người');
     expect(text).toContain('phía trước');
     expect(text).toContain('gần');
-    expect(text).toMatch(/^Lưu ý,/);
+    expect(text).toMatch(/^Chú ý,/);
   });
 
-  it('should return empty string for no warnings', () => {
-    const text = warningsToVietnamese([]);
-    expect(text).toBe('');
+  it('should announce clear path once, then suppress repeated clear-path messages during cooldown', () => {
+    const first = warningsToVietnamese([]);
+    const second = warningsToVietnamese([]);
+
+    expect(first).toBe('Đường phía trước trống, tiếp tục di chuyển.');
+    expect(second).toBe('');
   });
 
   it('should generate multi-object Vietnamese text', () => {

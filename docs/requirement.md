@@ -134,8 +134,8 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
    | Lời nói nhận diện | Mã tính năng | Âm thanh kích hoạt (Sound) | Lệnh BLE (App → Kính) | TTS Fallback xác nhận |
    | :--- | :---: | :---: | :---: | :--- |
    | "1", "số 1", "một", "số một", "tính năng 1", "tính năng một", "tính năng số 1", "tính năng số một", "hỏi đáp", "gpt" | `FEATURE_1_QA` | `Open_f1.mp3` | `CMD:PLAY_F1` | "Đã vào tính năng 1, hỏi đáp, đã sẵn sàng" |
-   | "2", "số 2", "hai", "số hai", "tính năng 2", "tính năng hai", "tính năng số 2", "tính năng số hai", "tính năng hay", "tính năng số hay", "chụp ảnh" | `FEATURE_2_CAPTURE` | `Open_f4.mp3` | `CMD:PLAY_F4` | "Đã vào tính năng 2, chụp ảnh" |
-   | "3", "số 3", "ba", "số ba", "tính năng 3", "tính năng ba", "tính năng số 3", "tính năng số ba", "tìm đường", "dẫn đường" | `FEATURE_3_NAVIGATION` | `Open_f2.mp3` | `CMD:PLAY_F2` | "Đã vào tính năng 3, chế độ dẫn đường" |
+   | "2", "số 2", "hai", "số hai", "tính năng 2", "tính năng hai", "tính năng số 2", "tính năng số hai", "tính năng hay", "tính năng số hay", "chụp ảnh" | `FEATURE_2_CAPTURE` | `Open_f2.mp3` | `CMD:PLAY_F2` | "Đã vào tính năng 2, chụp ảnh" |
+   | "3", "số 3", "ba", "số ba", "tính năng 3", "tính năng ba", "tính năng số 3", "tính năng số ba", "tìm đường", "dẫn đường" | `FEATURE_3_NAVIGATION` | `Open_f3.mp3` | `CMD:PLAY_F3` | "Đã vào tính năng 3, chế độ cảnh báo vật cản" |
 
    - Không khớp keyword nào → phát lại "Không nhận diện được lệnh, vui lòng thử lại" và quay về `IDLE`.
 
@@ -164,7 +164,7 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
 ## 6. Tính năng 2: Chụp ảnh (Photo Capture & Storage)
 
 1. **Kích hoạt:** User nói "tính năng 2", "tính năng hai", "tính năng hay", "số 2", "hai" hoặc "chụp ảnh" từ `IDLE` → chuyển sang `FEATURE_2_CAPTURE`.
-2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f4.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F4`** sang kính; TTS fallback: "Đã vào tính năng 2, chụp ảnh").
+2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f2.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F2`** sang kính; TTS fallback: "Đã vào tính năng 2, chụp ảnh").
 3. **Chụp & Truyền ảnh:**
    - App gửi lệnh điều khiển BLE **`CAPTURE`** qua Characteristic `AUDIO_OUT` sang kính.
    - Vi điều khiển ESP32-S3 điều khiển camera OV2640 chụp 1 khung ảnh JPEG (320×240 QVGA), cắt thành các packet Base64 (120 bytes binary → 160 Base64 chars) stream qua Characteristic `IMAGE` về App.
@@ -178,10 +178,10 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
 
 ## 7. Tính năng 3: Dẫn đường (Auto-pilot Obstacle & Depth Awareness)
 
-> **Lưu ý phạm vi:** Đây **không phải** dẫn đường GPS bản đồ (không GPS, không map turn-by-turn). Trong MVP, tính năng này là **nhận thức và cảnh báo vật cản theo thời gian thực (Real-time Obstacle & Depth Awareness)**.
+> **Lưu ý phạm vi:** MVP của tính năng này là **nhận thức và cảnh báo vật cản theo thời gian thực (Real-time Obstacle & Depth Awareness)**. Route/destination qua GPS + Mapbox chỉ là chế độ tùy chọn khi điện thoại có GPS và `MAPBOX_ACCESS_TOKEN` được cấu hình; không coi Mapbox/GPS là điều kiện để obstacle-awareness hoạt động.
 
 1. **Kích hoạt:** User nói "tính năng 3", "tính năng ba", "số 3", "ba", "tìm đường" hoặc "dẫn đường" từ `IDLE` → chuyển sang `FEATURE_3_NAVIGATION`.
-2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f2.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F2`** sang kính; TTS fallback: "Đã vào tính năng 3, chế độ dẫn đường").
+2. **Âm thanh kích hoạt:** App phát file âm thanh **`Open_f3.mp3`** (đồng thời bắn lệnh BLE **`CMD:PLAY_F3`** sang kính; TTS fallback: "Đã vào tính năng 3, chế độ cảnh báo vật cản").
 3. **Vòng lặp tự động (Auto-pilot Loop):**
    - App gửi lệnh điều khiển BLE **`NAV_START`** sang kính.
    - Kính kích hoạt timer định kỳ tự động chụp và gửi 1 frame JPEG mỗi **4 giây** (`NAVIGATION_FRAME_INTERVAL_MS = 4000`).
@@ -190,8 +190,8 @@ Mọi phản hồi bằng giọng nói phát ra khi app chuyển trạng thái (
    - **YOLO26s:** Nhận diện vật cản/người trong khung hình (`person`, `car`, `motorcycle`, `bicycle`, `truck`, `bus`, `stairs`, `chair/table`), xác định bounding box và độ tin cậy (ngưỡng threshold ≥ 0.5).
    - **ZipDepth:** Ước lượng bản đồ độ sâu tương đối (Relative Depth) bên trong bounding box của từng vật thể, phân loại khoảng cách **GẦN** hay **XA**.
 5. **Tổng hợp cảnh báo & Phát âm thanh:**
-   - Ghép kết quả theo luật rule-based (xem mục 7.1) thành câu cảnh báo súc tích: *"Lưu ý, có [vật thể] ở [vị trí], [gần/xa]"*.
-   - **Cơ chế chống lặp (Cooldown 8 giây):** Cùng 1 vật thể ở cùng vị trí/khoảng cách sẽ không nhắc lại trong 8 giây để tránh làm phiền người dùng. Nếu đường phía trước thông thoáng an toàn thì **giữ im lặng hoàn toàn**.
+   - Ghép kết quả theo luật rule-based (xem mục 7.1) thành câu cảnh báo súc tích: *"Chú ý, có [vật thể] ở [vị trí], [gần/xa]"*.
+   - **Cơ chế chống lặp:** Cùng 1 vật thể ở cùng vị trí/khoảng cách sẽ không nhắc lại trong 8 giây để tránh làm phiền người dùng. Nếu không có vật cản, app có thể phát câu xác nhận đường trống nhưng giới hạn bởi cooldown 10 giây.
    - Chuyển text cảnh báo thành giọng nói (TTS) và phát ngay lập tức (ngắt lời thoại cũ nếu có cảnh báo khẩn cấp mới).
 6. **Thoát chế độ:** 
    - User nhấn nhanh nút Ghi âm (≤ 300ms) trên kính bất kỳ lúc nào → Kính gửi mã BLE `02` (`BUTTON_SHORT_PRESS`), App gửi lệnh BLE **`NAV_STOP`** dừng timer chụp ảnh trên kính, phát TTS "Đã thoát chế độ dẫn đường" và trở về `IDLE`.
@@ -231,13 +231,13 @@ Vì 2 model chỉ trả về dữ liệu thô (bounding box + class từ YOLO, d
 
 **Chống lặp:** cùng một `object + position + distance` có **cooldown khoảng 8 giây** để tránh đọc lặp liên tục.
 
-**Câu mẫu:** "Lưu ý, có `{class}` ở `{vị trí}`, `{gần/xa}`" → ví dụ "Lưu ý, có người ở bên phải, gần" — có thể ghép nhiều cảnh báo trong 1 câu nếu cần.
+**Câu mẫu:** "Chú ý, có `{class}` ở `{vị trí}`, `{gần/xa}`" → ví dụ "Chú ý, có người ở bên phải, gần" — có thể ghép nhiều cảnh báo trong 1 câu nếu cần.
 
 Không cần model NLP/LLM để sinh câu — rule-based/template là đủ cho demo, ưu tiên tốc độ và độ ổn định hơn là câu văn tự nhiên hoàn hảo.
 
 **Ví dụ:**
 - Input: ảnh chụp mỗi 4s
-- Output (giọng nói): "Lưu ý, có người bên phải; phía trước có bậc thang"
+- Output (giọng nói): "Chú ý, có người bên phải; phía trước có bậc thang"
 
 ---
 
@@ -333,7 +333,7 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **APP-13** | **Mobile App** | Android Foreground Service & Quyền BLE Runtime | Cấu hình `BSmartForegroundService` kèm `PARTIAL_WAKE_LOCK`, khai báo quyền Android 12+ BLE và tự động xin quyền runtime (`BlePermissionService.ts`) | ✅ **Hoàn thành** |
 | **APP-14** | **Mobile App** | Luồng điều khiển vận hành Kính (App $\to$ ESP32) | Gửi các lệnh `NAV_START` (chu kỳ 4s), `NAV_STOP` (dừng chụp), `CAPTURE` (chụp ảnh đơn) qua `AUDIO_OUT_CHAR_UUID` điều khiển camera kính | ✅ **Hoàn thành** |
 | **APP-15** | **Mobile App** | Tích lũy Audio Chunk & Tích hợp PhoWhisper | Nối chuỗi PCM Base64 chunks từ ESP32 BLE thành WAV 16kHz chuẩn (`audioUtils.ts`), tích hợp PhoWhisper nhận diện giọng nói tiếng Việt thực tế | ✅ **Hoàn thành** |
-| **APP-16** | **Mobile App** | Dịch vụ Âm thanh Kích hoạt & Lệnh Trigger BLE | Tích hợp `SoundEffectService.ts` phát file âm thanh `Open_f1.mp3`, `Open_f4.mp3`, `Open_f2.mp3` qua `AudioPlayerModule` và gửi lệnh BLE `CMD:PLAY_F1`, `CMD:PLAY_F4`, `CMD:PLAY_F2` (đã pass test) | ✅ **Hoàn thành** |
+| **APP-16** | **Mobile App** | Dịch vụ Âm thanh Kích hoạt & Lệnh Trigger BLE | Tích hợp `SoundEffectService.ts` phát file âm thanh `Open_f1.mp3`, `Open_f2.mp3`, `Open_f3.mp3` qua `AudioPlayerModule` và gửi lệnh BLE `CMD:PLAY_F1`, `CMD:PLAY_F2`, `CMD:PLAY_F3` (đã pass test) | ✅ **Hoàn thành** |
 | **APP-17** | **Mobile App** | Mở rộng alias lệnh ghi âm tiếng Việt | `OnDeviceAsrService.ts` chuẩn hóa bỏ dấu và nhận các alias như "tính năng hay", "tính năng số hay", "tìm đường", số/một/hai/ba để mở đúng feature | ✅ **Hoàn thành** |
 | **MOD-01** | **AI On-Device** | Export PhoWhisper-tiny sang ONNX/TFLite Mobile | Xây dựng `ai_core/export_phowhisper_onnx.py`, tích hợp `OnDeviceAsrService.ts` nhận diện giọng nói 100% offline | ✅ **Hoàn thành** |
 | **MOD-02** | **AI On-Device** | Export SmolVLM2 sang ONNX/Mobile VLM Runtime | Xây dựng `ai_core/export_smolvlm2_onnx.py`, tích hợp `SmolVLM2-256M` on-device với native HF ONNX pipeline (vision encoder, token embedding, image embedding merge, decoder prefill/generation, KV-cache, async non-blocking, tensor/result recycling) trong `OnDeviceVlmService.ts` & `OnnxInferenceModule.kt` | ✅ **Hoàn thành** |
@@ -345,7 +345,7 @@ Hai phần sau **agent/dev không tự invent** — cần tạo **interface + mo
 | **FW-02** | **Firmware** | Điều khiển Camera (OV2640/OV5640) nén JPEG | Chụp ảnh độ phân giải 320x240 / 640x480, nén dung lượng ≤ 50–100 KB, phân mảnh gói BLE (`seq:total:payload`) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-03** | **Firmware** | Ghi âm mic I2S (INMP441 / PDM Onboard) | Thu âm 16kHz, mono, 16-bit khi người dùng giữ nút Ghi âm và stream Base64 qua BLE | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-04** | **Firmware** | Xử lý sự kiện nút bấm vật lý (Nút Ghi âm & Nguồn) | Phân biệt Hold (bắt đầu nói), Release (kết thúc), Short-press (<300ms, thoát về Home) | ✅ **Đã code C++** *(Chờ nạp mạch)* |
-| **FW-05** | **Firmware** | GATT Server & Bộ nhận lệnh điều khiển (App $\to$ Kính) | Phân mảnh BLE, xử lý các lệnh: `NAV_START`, `NAV_STOP`, `CAPTURE`, `CMD:PLAY_F1`, `CMD:PLAY_F2`, `CMD:PLAY_F4` | ✅ **Đã code C++** *(Chờ nạp mạch)* |
+| **FW-05** | **Firmware** | GATT Server & Bộ nhận lệnh điều khiển (App $\to$ Kính) | Phân mảnh BLE, xử lý các lệnh: `NAV_START`, `NAV_STOP`, `CAPTURE`, `CMD:PLAY_F1`, `CMD:PLAY_F2`, `CMD:PLAY_F3`; `CMD:PLAY_F4` chỉ giữ làm alias legacy cho Feature 2 | ✅ **Đã code C++** *(Chờ nạp mạch)* |
 | **FW-06** | **Firmware** | Phát âm thanh ra loa gọng kính (BLE Audio Pipe) | Nhận stream âm thanh từ điện thoại qua BLE và phát ra I2S DAC/Loa kính | ⚠️ **Chờ Protocol** |
 | **HW-01** | **Hardware/IoT** | Nạp vi điều khiển & kiểm thử phần cứng vật lý | Nạp code qua Arduino IDE (bật OPI PSRAM), kiểm tra Serial Monitor 115200, test Camera OV2640 & PDM mic | ⏳ **Sắp làm** *(Cần board vật lý)* |
 | **INT-01** | **Tích hợp** | Kiểm thử liên thông BLE thực tế Kính ↔ Điện thoại | Đo đạc trễ truyền nhận ảnh JPEG 320x240, audio WAV 16kHz, tỷ lệ rớt gói và tối ưu kích thước chunk/MTU | ⏳ **Sắp làm** *(Sau khi có board)* |

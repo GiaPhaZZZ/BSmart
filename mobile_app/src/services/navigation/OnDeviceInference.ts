@@ -9,8 +9,8 @@
  *   1. Base64 JPEG frame from glasses camera (320x240 / 640x480).
  *   2. Preprocessing: tensor normalization to [1, 3, 640, 640] and [1, 3, 384, 384].
  *   3. Inference: YOLO26s bounding box detection + ZipDepth depth map.
- *   4. Postprocessing: NMS filtering, confidence thresholding, mapping depth score
- *      to detected object centroids.
+ *   4. Postprocessing: NMS filtering, confidence thresholding, and per-bbox
+ *      ZipDepth fusion for each detected object.
  *   5. Navigation Engine: grid classification (Left/Center/Right) + cooldown alert.
  */
 
@@ -86,28 +86,18 @@ export async function runInference(
           return { objects: [], isReady: false };
         }
 
-        if (!OnnxInferenceModule?.runDepthEstimation) {
-          console.warn('[Inference] Native runDepthEstimation is not available.');
+        const objects = nativeObjects as DetectedObject[];
+        const invalidDepthObject = objects.find(obj => !Number.isFinite(Number(obj.depthScore)));
+        if (invalidDepthObject) {
+          console.warn('[Inference] Native detection returned invalid fused depth:', invalidDepthObject);
           return { objects: [], isReady: false };
         }
 
-        const depth = await OnnxInferenceModule.runDepthEstimation(imageBase64);
-        const relativeDepthMean = Number(depth?.relativeDepthMean);
-        if (!Number.isFinite(relativeDepthMean)) {
-          console.warn('[Inference] ZipDepth returned invalid depth payload:', depth);
-          return { objects: [], isReady: false };
-        }
-
-        console.log(`[Inference] ZipDepth relativeDepthMean=${relativeDepthMean}`);
-
-        if (nativeObjects.length === 0) {
-          return { objects: [], isReady: true };
-        }
-
-        const objects = (nativeObjects as DetectedObject[]).map(obj => ({
-          ...obj,
-          depthScore: relativeDepthMean,
-        }));
+        objects.forEach(obj => {
+          console.log(
+            `[F3] ${obj.class} bbox=[x=${obj.x},y=${obj.y},w=${obj.width},h=${obj.height}] depth=${obj.depthScore}`,
+          );
+        });
 
         return {
           objects,

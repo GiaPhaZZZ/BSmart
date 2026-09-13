@@ -16,7 +16,7 @@ import {
   BLE_SCAN_TIMEOUT_MS,
   BLE_DEVICE_NAME_PREFIX,
 } from '../../constants/bleUuids';
-import { stringToBase64 } from '../audio/audioUtils';
+import { base64ToBytes, stringToBase64 } from '../audio/audioUtils';
 
 type ButtonCallback = (event: BleEvent) => void;
 type ImageCallback = (imageBase64: string) => void;
@@ -146,6 +146,12 @@ export class BlePlxService implements IBleService {
 
           try {
             this.device = await scannedDevice.connect();
+            try {
+              this.device = await this.device.requestMTU(517);
+              console.log(`[BlePlx] MTU negotiated: ${this.device.mtu}`);
+            } catch (mtuError) {
+              console.warn('[BlePlx] MTU negotiation failed; continuing with default MTU:', mtuError);
+            }
             await this.device.discoverAllServicesAndCharacteristics();
             this.setConnectionState(BleConnectionState.CONNECTED);
             this.setupMonitors();
@@ -239,7 +245,7 @@ export class BlePlxService implements IBleService {
       BLE_UUIDS.BUTTON_CHARACTERISTIC_UUID,
       (error, characteristic) => {
         if (error || !characteristic?.value) return;
-        this.parseButtonPacket(characteristic.value);
+        this.parseButtonPacket(this.decodeCharacteristicText(characteristic.value));
       },
     );
     this.monitorSubscriptions.push(buttonSub);
@@ -250,7 +256,7 @@ export class BlePlxService implements IBleService {
       BLE_UUIDS.IMAGE_CHARACTERISTIC_UUID,
       (error, characteristic) => {
         if (error || !characteristic?.value) return;
-        this.parseImageChunkPacket(characteristic.value);
+        this.parseImageChunkPacket(this.decodeCharacteristicText(characteristic.value));
       },
     );
     this.monitorSubscriptions.push(imageSub);
@@ -261,10 +267,36 @@ export class BlePlxService implements IBleService {
       BLE_UUIDS.AUDIO_IN_CHARACTERISTIC_UUID,
       (error, characteristic) => {
         if (error || !characteristic?.value) return;
-        this.emit(this.audioCallbacks, characteristic.value);
+        this.emit(this.audioCallbacks, this.decodeCharacteristicText(characteristic.value));
       },
     );
     this.monitorSubscriptions.push(audioSub);
+  }
+
+  private decodeCharacteristicText(value: string): string {
+    const clean = value.trim();
+    if (!clean || clean.includes(':') || clean === '01' || clean === '00' || clean === '02') {
+      return clean;
+    }
+    if (clean.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(clean)) {
+      return clean;
+    }
+
+    try {
+      const bytes = base64ToBytes(clean);
+      let decoded = '';
+      for (let i = 0; i < bytes.length; i++) {
+        decoded += String.fromCharCode(bytes[i]);
+      }
+
+      const printableAscii = decoded.length > 0 && [...decoded].every(ch => {
+        const code = ch.charCodeAt(0);
+        return code === 9 || code === 10 || code === 13 || (code >= 32 && code <= 126);
+      });
+      return printableAscii ? decoded : clean;
+    } catch {
+      return clean;
+    }
   }
 
   /**
@@ -311,17 +343,9 @@ export class BlePlxService implements IBleService {
       this.imageBuffer &&
       now - this.imageBuffer.timestamp > BlePlxService.IMAGE_BUFFER_TIMEOUT_MS
     ) {
-      // Error concealment: If we have at least 80% of chunks, try to decode it anyway
-      if (this.imageBuffer.chunks.size > this.imageBuffer.totalChunks * 0.8) {
-        console.warn('[BlePlx] Image buffer timed out, but emitting partial frame.');
-        let fullBase64 = '';
-        for (let i = 0; i < this.imageBuffer.totalChunks; i++) {
-          fullBase64 += this.imageBuffer.chunks.get(i) ?? '';
-        }
-        this.emit(this.imageCallbacks, fullBase64);
-      } else {
-        console.warn('[BlePlx] Image buffer timed out (dropped chunks). Resetting.');
-      }
+      console.warn(
+        `[BlePlx] Image buffer timed out (${this.imageBuffer.chunks.size}/${this.imageBuffer.totalChunks} chunks). Dropping partial frame.`,
+      );
       this.imageBuffer = null;
     }
 
@@ -344,6 +368,9 @@ export class BlePlxService implements IBleService {
         fullBase64 += this.imageBuffer.chunks.get(i) ?? '';
       }
       this.imageBuffer = null;
+      console.log(
+        `[BlePlx] Image transfer complete chunks=${total} base64Chars=${fullBase64.length}`,
+      );
       this.emit(this.imageCallbacks, fullBase64);
     }
   }

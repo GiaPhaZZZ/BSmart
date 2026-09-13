@@ -17,16 +17,16 @@ Usage:
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
 
-import torch
-import torch.nn as nn
-
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "exported_models" / "navigation"
-DEFAULT_YOLO_WEIGHTS = Path(__file__).resolve().parent.parent / "yolo26s.pt"
-DEFAULT_ZIPDEPTH_WEIGHTS = Path(__file__).resolve().parent.parent / "ZipDepth" / "checkpoints" / "zipdepth_base_npu.pth"
+DEFAULT_YOLO_WEIGHTS = PROJECT_ROOT / "models" / "yolo26s.pt"
+DEFAULT_ZIPDEPTH_WEIGHTS = PROJECT_ROOT / "models" / "ZipDepth" / "checkpoints" / "zipdepth_base_npu.pth"
+ZIPDEPTH_EXPORT_SCRIPT = PROJECT_ROOT / "models" / "ZipDepth" / "scripts" / "export.py"
 
 COCO_CLASSES_VI: List[Dict[str, Any]] = [
     {"id": 0, "en": "person", "vi": "người", "priority": 1},
@@ -112,64 +112,6 @@ COCO_CLASSES_VI: List[Dict[str, Any]] = [
 ]
 
 
-class DummyYOLO26sDetector(nn.Module):
-    """
-    Lightweight PyTorch representation of YOLO26s Detector
-    producing output tensor [batch, 84, 8400] matching standard Ultralytics YOLO format.
-    """
-    def __init__(self, num_classes: int = 80, num_anchors: int = 8400):
-        super().__init__()
-        self.num_classes = num_classes
-        self.num_anchors = num_anchors
-        self.conv = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(32),
-            nn.SiLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(64),
-            nn.SiLU(),
-            nn.AdaptiveAvgPool2d((10, 10))
-        )
-        self.head = nn.Linear(64 * 10 * 10, (num_classes + 4) * 84)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [batch, 3, 640, 640]
-        batch_size = x.size(0)
-        feat = self.conv(x)
-        feat = feat.view(batch_size, -1)
-        raw = self.head(feat)
-        # Reshape to [batch, 84, 8400] (standard YOLO output)
-        out = raw.view(batch_size, self.num_classes + 4, 84).repeat(1, 1, 100)
-        return out
-
-
-class DummyZipDepthEstimator(nn.Module):
-    """
-    Lightweight PyTorch representation of ZipDepth monocular depth estimator
-    producing inverse depth map [batch, 1, 384, 384].
-    """
-    def __init__(self):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-        )
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1),
-            nn.Sigmoid()  # outputs relative depth in [0, 1]
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [batch, 3, 384, 384]
-        feat = self.encoder(x)
-        depth = self.decoder(feat)
-        return depth
-
-
 def export_metadata(output_dir: Path) -> Path:
     """Export Vietnamese labels and navigation model hyperparameters."""
     labels_path = output_dir / "coco_labels_vi.json"
@@ -184,6 +126,9 @@ def export_metadata(output_dir: Path) -> Path:
                 "input_name": "images",
                 "output_name": "output0",
                 "input_shape": [1, 3, 640, 640],
+                "output_shape": [1, 300, 6],
+                "output_format": "xyxy_conf_class",
+                "opset": 14,
                 "confidence_threshold": 0.5,
                 "iou_threshold": 0.45,
                 "num_classes": 80,
@@ -194,17 +139,20 @@ def export_metadata(output_dir: Path) -> Path:
                 "input_name": "image",
                 "output_name": "depth",
                 "input_shape": [1, 3, 384, 384],
+                "output_shape": [1, 1, 384, 384],
+                "opset": 18,
+                "external_data": False,
                 "scale_type": "relative_inverse_depth",
                 "near_threshold": 0.4,
             }
         },
         "navigation_rules": {
             "grid_horizontal": {"left": 0.33, "center": 0.66, "right": 1.0},
-            "cooldown_seconds": 8,
-            "cycle_seconds": 4,
-            "max_reported_objects": 2,
-            "template": "Lưu ý, có {class} ở {position}, {distance}"
-        }
+        "cooldown_seconds": 8,
+        "cycle_seconds": 4,
+        "max_reported_objects": 2,
+        "template": "Chú ý, có {class} ở {position}, {distance}"
+    }
     }
 
     meta_path = output_dir / "navigation_model_meta.json"
@@ -219,61 +167,90 @@ def export_yolo(output_dir: Path, weights_path: Path = DEFAULT_YOLO_WEIGHTS) -> 
     output_path = output_dir / "yolo26s.onnx"
     print(f"[MOD-03] Exporting YOLO26s to {output_path}...")
 
-    if weights_path.exists():
-        try:
-            from ultralytics import YOLO
-            print(f"[MOD-03] Loading weights from {weights_path}...")
-            model = YOLO(str(weights_path))
-            model.export(format="onnx", imgsz=640, dynamic=True)
-            exported = weights_path.with_suffix(".onnx")
-            if exported.exists():
-                os.replace(exported, output_path)
-                print(f"[MOD-03] Ultralytics export complete: {output_path}")
-                return output_path
-        except Exception as e:
-            print(f"[MOD-03] Ultralytics export failed ({e}), using traced fallback...")
+    if not weights_path.exists():
+        raise FileNotFoundError(f"YOLO weights not found: {weights_path}")
 
-    # Traced architecture export
-    detector = DummyYOLO26sDetector()
-    detector.eval()
-    dummy_input = torch.randn(1, 3, 640, 640, dtype=torch.float32)
+    from ultralytics import YOLO
 
-    torch.onnx.export(
-        detector,
-        dummy_input,
-        str(output_path),
-        export_params=True,
-        opset_version=14,
-        do_constant_folding=True,
-        input_names=["images"],
-        output_names=["output0"],
-        dynamic_axes={"images": {0: "batch_size"}, "output0": {0: "batch_size"}},
-    )
-    print(f"[MOD-03] YOLO26s exported successfully ({output_path.stat().st_size / 1024 / 1024:.2f} MB)")
+    print(f"[MOD-03] Loading real YOLO weights from {weights_path}...")
+    model = YOLO(str(weights_path))
+    exported = Path(model.export(format="onnx", imgsz=640, opset=14, dynamic=False, simplify=False, nms=False))
+    if not exported.exists():
+        exported = weights_path.with_suffix(".onnx")
+    if not exported.exists():
+        raise RuntimeError(f"Ultralytics export did not create an ONNX file for {weights_path}")
+
+    os.replace(exported, output_path)
+    print(f"[MOD-03] Ultralytics export complete: {output_path} ({output_path.stat().st_size / 1024 / 1024:.2f} MB)")
     return output_path
 
 
 def export_zipdepth(output_dir: Path, weights_path: Path = DEFAULT_ZIPDEPTH_WEIGHTS) -> Path:
     """Export ZipDepth model to ONNX."""
     output_path = output_dir / "zipdepth.onnx"
+    output_path_abs = output_path.resolve()
+    temp_output_path = output_path_abs.with_name("zipdepth_export_tmp.onnx")
     print(f"[MOD-03] Exporting ZipDepth to {output_path}...")
 
-    # Traced architecture export
-    estimator = DummyZipDepthEstimator()
-    estimator.eval()
-    dummy_input = torch.randn(1, 3, 384, 384, dtype=torch.float32)
+    if not weights_path.exists():
+        raise FileNotFoundError(f"ZipDepth checkpoint not found: {weights_path}")
+    if not ZIPDEPTH_EXPORT_SCRIPT.exists():
+        raise FileNotFoundError(f"ZipDepth exporter not found: {ZIPDEPTH_EXPORT_SCRIPT}")
 
-    torch.onnx.export(
-        estimator,
-        dummy_input,
-        str(output_path),
-        export_params=True,
-        opset_version=14,
-        do_constant_folding=True,
-        input_names=["image"],
-        output_names=["depth"],
-        dynamic_axes={"image": {0: "batch_size"}, "depth": {0: "batch_size"}},
-    )
+    cmd = [
+        sys.executable,
+        str(ZIPDEPTH_EXPORT_SCRIPT),
+        "--ckpt",
+        str(weights_path),
+        "--format",
+        "onnx",
+        "--variant",
+        "base",
+        "--global-mode",
+        "balanced",
+        "--height",
+        "384",
+        "--width",
+        "384",
+        "--opset",
+        "18",
+        "--npu",
+        "--output",
+        str(temp_output_path),
+    ]
+    for stale in [
+        output_path_abs,
+        temp_output_path,
+        temp_output_path.with_name(f"{temp_output_path.stem}_raw.onnx"),
+        temp_output_path.with_name(f"{temp_output_path.stem}_raw.onnx.data"),
+    ]:
+        if stale.exists():
+            stale.unlink()
+
+    print(f"[MOD-03] Running real ZipDepth exporter: {' '.join(cmd)}")
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    subprocess.run(cmd, cwd=str(ZIPDEPTH_EXPORT_SCRIPT.parent.parent), env=env, check=True)
+    if not temp_output_path.exists():
+        raise RuntimeError(f"ZipDepth export did not create {temp_output_path}")
+
+    import onnx
+
+    model = onnx.load(str(temp_output_path), load_external_data=True)
+    onnx.save_model(model, str(output_path_abs), save_as_external_data=False)
+    for stale in [
+        temp_output_path,
+        temp_output_path.with_name(f"{temp_output_path.stem}.data"),
+        temp_output_path.with_name(f"{temp_output_path.stem}_raw.onnx"),
+        temp_output_path.with_name(f"{temp_output_path.stem}_raw.onnx.data"),
+    ]:
+        if stale.exists():
+            stale.unlink()
+
+    if not output_path.exists():
+        raise RuntimeError(f"ZipDepth export did not create {output_path}")
+
     print(f"[MOD-03] ZipDepth exported successfully ({output_path.stat().st_size / 1024 / 1024:.2f} MB)")
     return output_path
 

@@ -15,6 +15,7 @@ import {
   YOLO_CONFIDENCE_THRESHOLD,
   MAX_WARNINGS_PER_FRAME,
   WARNING_COOLDOWN_MS,
+  CLEAR_PATH_COOLDOWN_MS,
   PRIORITY_OBJECT_CLASSES,
   CLASS_NAME_VI,
 } from '../../constants/navigationRules';
@@ -109,14 +110,14 @@ export function processNavigationFrame(
 
 /**
  * Convert NavigationWarning array to Vietnamese speech text
- * Template: "Lưu ý, có {class} ở {vị trí}, {gần/xa}"
+ * Template: "Chú ý, có {class} ở {vị trí}, {gần/xa}"
  */
 export function warningsToVietnamese(warnings: NavigationWarning[]): string {
   const now = Date.now();
   if (warnings.length === 0) {
     const lastClear = cooldownMap.get('CLEAR_PATH') || 0;
     // Báo đường trống mỗi 10 giây (nếu không có vật cản nào)
-    if (now - lastClear > 10000) {
+    if (now - lastClear > CLEAR_PATH_COOLDOWN_MS) {
       cooldownMap.set('CLEAR_PATH', now);
       return 'Đường phía trước trống, tiếp tục di chuyển.';
     }

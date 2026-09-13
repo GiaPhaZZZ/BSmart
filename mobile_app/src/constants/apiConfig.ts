@@ -10,6 +10,10 @@
 
 export const API_BASE_URL = 'https://reprimand-ambiguous-founder.ngrok-free.dev';
 
+// Optional route mode only. Leave blank for obstacle-awareness demos.
+// Do not commit personal or production Mapbox tokens into source.
+export const MAPBOX_ACCESS_TOKEN = '';
+
 export const API_ENDPOINTS = {
   TRANSCRIBE: `${API_BASE_URL}/transcribe`,
   QA: `${API_BASE_URL}/qa`,

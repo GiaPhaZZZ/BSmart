@@ -4,7 +4,7 @@
  * Includes Geocoding (Forward Search) and Directions API (Walking profile).
  */
 
-const MAPBOX_TOKEN = 'pk.eyJ1IjoiMTIzcGhhdDQ1NiIsImEiOiJjbXR0dnZ6bW8wYjRsMnpvajBvcHNpMWM3In0.XuLJMgvVYi48jWiAfI8w-g';
+import { MAPBOX_ACCESS_TOKEN } from '../../constants/apiConfig';
 
 export interface LocationCoordinates {
   lat: number;
@@ -38,7 +38,10 @@ export const MapboxService = {
    */
   async searchDestination(query: string, proximity?: LocationCoordinates): Promise<LocationCoordinates | null> {
     try {
-      let url = `https://api.mapbox.com/search/searchbox/v1/forward?q=${encodeURIComponent(query)}&language=vi&country=VN&limit=1&access_token=${MAPBOX_TOKEN}`;
+      const token = getMapboxAccessToken();
+      if (!token) return null;
+
+      let url = `https://api.mapbox.com/search/searchbox/v1/forward?q=${encodeURIComponent(query)}&language=vi&country=VN&limit=1&access_token=${encodeURIComponent(token)}`;
       if (proximity) {
         url += `&proximity=${proximity.lon},${proximity.lat}`;
       }
@@ -70,8 +73,11 @@ export const MapboxService = {
    */
   async getWalkingDirections(origin: LocationCoordinates, dest: LocationCoordinates): Promise<MapboxRoute | null> {
     try {
+      const token = getMapboxAccessToken();
+      if (!token) return null;
+
       const coordsStr = `${origin.lon},${origin.lat};${dest.lon},${dest.lat}`;
-      const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${coordsStr}?steps=true&geometries=geojson&overview=full&language=vi&access_token=${MAPBOX_TOKEN}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${coordsStr}?steps=true&geometries=geojson&overview=full&language=vi&access_token=${encodeURIComponent(token)}`;
 
       const response = await fetch(url);
       if (!response.ok) {
@@ -89,3 +95,12 @@ export const MapboxService = {
     }
   }
 };
+
+function getMapboxAccessToken(): string | null {
+  const token = MAPBOX_ACCESS_TOKEN.trim();
+  if (!token) {
+    console.warn('[MapboxService] MAPBOX_ACCESS_TOKEN is not configured; skipping Mapbox request.');
+    return null;
+  }
+  return token;
+}

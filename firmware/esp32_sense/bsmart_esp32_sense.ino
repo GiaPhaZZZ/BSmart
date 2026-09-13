@@ -21,6 +21,7 @@
 #include "camera_pins.h"
 #include "driver/i2s.h"
 #include "esp_camera.h"
+#include "freertos/ringbuf.h"
 #include "mbedtls/base64.h"
 #include <Arduino.h>
 #include <BLE2902.h>
@@ -45,6 +46,9 @@
 // (Multiple of 3 bytes) Perfectly fits inside standard BLE MTU packet (<180
 // bytes) without packet dropping
 #define I2S_READ_CHUNK_LEN 120
+#define SPEAKER_AUDIO_BUFFER_BYTES (16 * 1024)
+#define SPEAKER_AUDIO_MAX_CHUNK_BYTES 512
+#define SPEAKER_AUDIO_TASK_STACK_BYTES 4096
 
 // --- Button Timing Constraints (FW-04) ---
 #define SHORT_PRESS_MAX_MS 300
@@ -56,6 +60,9 @@ BLECharacteristic *pButtonChar = nullptr;
 BLECharacteristic *pImageChar = nullptr;
 BLECharacteristic *pAudioInChar = nullptr;
 BLECharacteristic *pAudioOutChar = nullptr;
+RingbufHandle_t speakerAudioBuffer = nullptr;
+TaskHandle_t speakerAudioTaskHandle = nullptr;
+volatile uint32_t speakerDroppedChunks = 0;
 
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
@@ -70,9 +77,78 @@ int lastButtonState = HIGH;
 // Auto 4s frame timer for navigation mode
 unsigned long lastFrameCaptureTime = 0;
 bool autoCaptureEnabled = false;
+volatile bool singleCaptureRequested = false;
 
 // Forward declaration
 void captureAndSendImage();
+
+void speakerAudioTask(void *parameter) {
+  uint32_t bytesSinceLog = 0;
+  uint32_t lastReportedDrops = 0;
+
+  while (true) {
+    size_t chunkLength = 0;
+    void *chunk =
+        xRingbufferReceive(speakerAudioBuffer, &chunkLength, portMAX_DELAY);
+    if (!chunk)
+      continue;
+
+    size_t bytesWritten = 0;
+    esp_err_t result =
+        i2s_write(I2S_SPK_PORT, chunk, chunkLength, &bytesWritten, portMAX_DELAY);
+    vRingbufferReturnItem(speakerAudioBuffer, chunk);
+
+    if (result != ESP_OK) {
+      Serial.printf("[I2S Speaker] Write failed: 0x%x\n", result);
+      continue;
+    }
+
+    bytesSinceLog += bytesWritten;
+    if (bytesSinceLog >= 4096 || speakerDroppedChunks != lastReportedDrops) {
+      Serial.printf("[I2S Speaker] Streamed %u PCM bytes (dropped chunks: %u)\n",
+                    (unsigned int)bytesSinceLog,
+                    (unsigned int)speakerDroppedChunks);
+      bytesSinceLog = 0;
+      lastReportedDrops = speakerDroppedChunks;
+    }
+  }
+}
+
+bool initSpeakerAudioWorker() {
+  speakerAudioBuffer =
+      xRingbufferCreate(SPEAKER_AUDIO_BUFFER_BYTES, RINGBUF_TYPE_NOSPLIT);
+  if (!speakerAudioBuffer) {
+    Serial.println("[I2S Speaker] Failed to allocate audio ring buffer");
+    return false;
+  }
+
+  BaseType_t taskResult = xTaskCreatePinnedToCore(
+      speakerAudioTask, "speaker_audio", SPEAKER_AUDIO_TASK_STACK_BYTES, nullptr,
+      2, &speakerAudioTaskHandle, 1);
+  if (taskResult != pdPASS) {
+    vRingbufferDelete(speakerAudioBuffer);
+    speakerAudioBuffer = nullptr;
+    Serial.println("[I2S Speaker] Failed to start audio worker task");
+    return false;
+  }
+
+  Serial.println("[I2S Speaker] Audio worker initialized");
+  return true;
+}
+
+bool enqueueSpeakerAudio(const uint8_t *data, size_t length) {
+  if (!speakerAudioBuffer || length == 0 ||
+      length > SPEAKER_AUDIO_MAX_CHUNK_BYTES) {
+    speakerDroppedChunks++;
+    return false;
+  }
+
+  if (xRingbufferSend(speakerAudioBuffer, data, length, 0) != pdTRUE) {
+    speakerDroppedChunks++;
+    return false;
+  }
+  return true;
+}
 
 // =============================================================================
 // BLE Callbacks & Remote Command Processing
@@ -86,6 +162,7 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer *server) override {
     deviceConnected = false;
     autoCaptureEnabled = false;
+    singleCaptureRequested = false;
     isRecordingAudio = false;
     Serial.println("[BLE] Mobile App disconnected. Resetting state and "
                    "restarting advertising...");
@@ -110,31 +187,19 @@ class AudioOutCallbacks : public BLECharacteristicCallbacks {
           "[App Command] Navigation mode stopped (Auto capture OFF)");
     } else if (value == "CAPTURE") {
       Serial.println("[App Command] Single capture requested");
-      captureAndSendImage();
+      singleCaptureRequested = true;
     } else if (value == "CMD:PLAY_F1") {
       Serial.println("[BLE Audio Out] Trigger activation sound: Feature 1 (Chatbot / Hỏi đáp)");
     } else if (value == "CMD:PLAY_F2") {
+      Serial.println("[BLE Audio Out] Trigger activation sound: Feature 2 (Chụp ảnh)");
+    } else if (value == "CMD:PLAY_F3") {
       Serial.println("[BLE Audio Out] Trigger activation sound: Feature 3 (Dẫn đường / Autopilot)");
     } else if (value == "CMD:PLAY_F4") {
-      Serial.println("[BLE Audio Out] Trigger activation sound: Feature 2 (Chụp ảnh)");
+      Serial.println("[BLE Audio Out] Trigger activation sound: Feature 2 legacy alias (Chụp ảnh)");
     } else {
-      // Decode Base64 PCM audio or stream raw binary PCM to MAX98357A I2S speaker (Direction B)
-      size_t decodedLen = 0;
-      uint8_t pcmBuf[512];
-      int ret = mbedtls_base64_decode(pcmBuf, sizeof(pcmBuf), &decodedLen,
-                                      (const unsigned char *)value.c_str(), value.length());
-      if (ret == 0 && decodedLen > 0) {
-        size_t bytesWritten = 0;
-        i2s_write(I2S_SPK_PORT, pcmBuf, decodedLen, &bytesWritten, 100 / portTICK_PERIOD_MS);
-        Serial.printf("[I2S Speaker] Played %u bytes decoded PCM via MAX98357A\n", (unsigned int)bytesWritten);
-      } else if (value.length() > 0) {
-        // Direct raw binary PCM stream from BlePlx GATT write
-        size_t bytesWritten = 0;
-        i2s_write(I2S_SPK_PORT, (const uint8_t *)value.data(), value.length(), &bytesWritten, 100 / portTICK_PERIOD_MS);
-        Serial.printf("[I2S Speaker] Played %u bytes raw PCM via MAX98357A\n", (unsigned int)bytesWritten);
-      } else {
-        Serial.printf("[BLE Audio Out] Received empty payload\n");
-      }
+      // BlePlx decodes its Base64 transport value before the GATT write, so the
+      // callback receives raw PCM. Queue it and return quickly from BTC_TASK.
+      enqueueSpeakerAudio((const uint8_t *)value.data(), value.length());
     }
   }
 };
@@ -497,7 +562,9 @@ void setup() {
   initI2SMicrophone();
 
   // 3b. Initialize I2S DAC Speaker (MAX98357A)
-  initI2SSpeaker();
+  if (initI2SSpeaker()) {
+    initSpeakerAudioWorker();
+  }
 
   // 4. Initialize BLE GATT Server
   BLEDevice::init(BLE_DEVICE_NAME);
@@ -576,6 +643,12 @@ void loop() {
   // Stream microphone audio while user is holding button (Push-to-talk)
   if (isRecordingAudio) {
     streamAudioChunk();
+  }
+
+  // Run on-demand capture outside the BLE callback to keep BTC_TASK stack small.
+  if (singleCaptureRequested && deviceConnected) {
+    singleCaptureRequested = false;
+    captureAndSendImage();
   }
 
   // Periodic navigation capture (every 4s) when enabled

@@ -38,22 +38,22 @@
       "name": "navigation_model_meta.json",
       "path": "navigation/navigation_model_meta.json",
       "type": "config_metadata",
-      "size_bytes": 949,
-      "sha256": "dde4ec4ffce0aabfe88cf9e99a3e712b735af750a554884d351bd9f7f7d5a501"
+      "size_bytes": 1220,
+      "sha256": "2c4cfb6aa418dc7de3c0a836c98f782176e0047a92b67883d8234ee93f985721"
     },
     {
       "name": "yolo26s.onnx",
       "path": "navigation/yolo26s.onnx",
       "type": "onnx_model",
-      "size_bytes": 180742351,
-      "sha256": "d7608844e03f23cd882be771a4c1690a01071c1d82486e74671ac1cc1a8a7901"
+      "size_bytes": 38242939,
+      "sha256": "5339458217e69e19c1157fadb309010787ea9c442190d43aa11ca0b614f0584b"
     },
     {
       "name": "zipdepth.onnx",
       "path": "navigation/zipdepth.onnx",
       "type": "onnx_model",
-      "size_bytes": 212538,
-      "sha256": "d01da0401b2af6a3309776b4e777bfe216dc7fc2a465f509d3fea034cfc6be9b"
+      "size_bytes": 24792278,
+      "sha256": "8fafaa05da1d62a8eca1a4dcfc2e34e1f113117b6b8a5aba104dc863a4facc20"
     },
     {
       "name": "model_meta.json",
@@ -106,5 +106,5 @@
     }
   ],
   "total_files": 11,
-  "total_size_bytes": 576947440
+  "total_size_bytes": 459028040
 }

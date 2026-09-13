@@ -21,6 +21,9 @@ export const MAX_WARNINGS_PER_FRAME = 2;
 // Cooldown duration per (class + position + distance) combo, in milliseconds
 export const WARNING_COOLDOWN_MS = 8000;
 
+// Cooldown duration for positive "clear path" reassurance, in milliseconds
+export const CLEAR_PATH_COOLDOWN_MS = 10000;
+
 // Navigation frame capture interval (ms)
 export const NAVIGATION_FRAME_INTERVAL_MS = 4000;
 

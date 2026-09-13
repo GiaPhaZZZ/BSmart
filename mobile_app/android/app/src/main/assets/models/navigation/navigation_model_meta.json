@@ -11,6 +11,13 @@
         640,
         640
       ],
+      "output_shape": [
+        1,
+        300,
+        6
+      ],
+      "output_format": "xyxy_conf_class",
+      "opset": 14,
       "confidence_threshold": 0.5,
       "iou_threshold": 0.45,
       "num_classes": 80
@@ -26,6 +33,14 @@
         384,
         384
       ],
+      "output_shape": [
+        1,
+        1,
+        384,
+        384
+      ],
+      "opset": 18,
+      "external_data": false,
       "scale_type": "relative_inverse_depth",
       "near_threshold": 0.4
     }
@@ -39,6 +54,6 @@
     "cooldown_seconds": 8,
     "cycle_seconds": 4,
     "max_reported_objects": 2,
-    "template": "Lưu ý, có {class} ở {position}, {distance}"
+    "template": "Chú ý, có {class} ở {position}, {distance}"
   }
 }

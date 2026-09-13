@@ -1,5 +1,6 @@
 import { BlePlxService } from '../src/services/ble/BlePlxService';
 import { BleConnectionState, BleEvent } from '../src/types';
+import { stringToBase64 } from '../src/services/audio/audioUtils';
 
 // Mock react-native-ble-plx
 jest.mock('react-native-ble-plx', () => {
@@ -50,6 +51,39 @@ describe('BlePlxService Unit Tests', () => {
     expect(receivedImages[0]).toBe('BASE64_PART_1_BASE64_PART_2');
   });
 
+  test('decodes BLE-PLX Base64 text notifications before image reassembly', () => {
+    const receivedImages: string[] = [];
+    service.onImageReceived(img => receivedImages.push(img));
+
+    const packet1 = (service as any).decodeCharacteristicText(
+      stringToBase64('0:2:BASE64_PART_1_'),
+    );
+    const packet2 = (service as any).decodeCharacteristicText(
+      stringToBase64('1:2:BASE64_PART_2'),
+    );
+
+    (service as any).parseImageChunkPacket(packet1);
+    (service as any).parseImageChunkPacket(packet2);
+
+    expect(receivedImages).toEqual(['BASE64_PART_1_BASE64_PART_2']);
+  });
+
+  test('drops timed-out partial image buffers instead of emitting corrupted frames', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const receivedImages: string[] = [];
+    service.onImageReceived(img => receivedImages.push(img));
+
+    (service as any).parseImageChunkPacket('0:2:PARTIAL_');
+    (service as any).imageBuffer.timestamp -= 6000;
+    (service as any).parseImageChunkPacket('0:1:COMPLETE');
+
+    expect(receivedImages).toEqual(['COMPLETE']);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[BlePlx] Image buffer timed out (1/2 chunks). Dropping partial frame.',
+    );
+    warnSpy.mockRestore();
+  });
+
   test('button packets parse HOLD, RELEASE, and SHORT_PRESS', () => {
     const events: BleEvent[] = [];
     service.onButtonEvent(evt => events.push(evt));
@@ -62,5 +96,26 @@ describe('BlePlxService Unit Tests', () => {
     expect(events[0].type).toBe('BUTTON_HOLD');
     expect(events[1].type).toBe('BUTTON_RELEASE');
     expect(events[2].type).toBe('BUTTON_SHORT_PRESS');
+  });
+
+  test('decodes BLE-PLX Base64 text notifications before button parsing', () => {
+    const events: BleEvent[] = [];
+    service.onButtonEvent(evt => events.push(evt));
+
+    (service as any).parseButtonPacket(
+      (service as any).decodeCharacteristicText(stringToBase64('01')),
+    );
+    (service as any).parseButtonPacket(
+      (service as any).decodeCharacteristicText(stringToBase64('00')),
+    );
+    (service as any).parseButtonPacket(
+      (service as any).decodeCharacteristicText(stringToBase64('02')),
+    );
+
+    expect(events.map(evt => evt.type)).toEqual([
+      'BUTTON_HOLD',
+      'BUTTON_RELEASE',
+      'BUTTON_SHORT_PRESS',
+    ]);
   });
 });

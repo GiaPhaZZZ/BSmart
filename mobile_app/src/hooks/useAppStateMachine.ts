@@ -51,6 +51,12 @@ import {
   runInference,
   isInferenceAvailable,
 } from '../services/navigation/OnDeviceInference';
+import {
+  estimateBase64Bytes,
+  formatFeature3FrameLog,
+  formatFeature3ObjectLog,
+  formatFeature3WarningLog,
+} from '../services/navigation/Feature3RuntimeLog';
 import { NAVIGATION_FRAME_INTERVAL_MS } from '../constants/navigationRules';
 import { saveCapturedImage } from '../services/storage/ImageStorageService';
 import { MapboxService } from '../services/navigation/MapboxService';
@@ -87,6 +93,8 @@ function matchFeatureKeyword(
       return null;
   }
 }
+
+const GLASSES_CAPTURE_TIMEOUT_MS = 15000;
 
 function normalizeVietnameseCommand(text: string): string {
   return text
@@ -157,6 +165,10 @@ export interface AppStateMachineResult {
   // BLE controls
   onConnect: () => void;
   onDisconnect: () => void;
+  // Dev-only direct pipeline triggers
+  onDebugStartNavigation: () => void;
+  onDebugCaptureImage: () => void;
+  onDebugStopNavigation: () => void;
 }
 
 export function useAppStateMachine(): AppStateMachineResult {
@@ -187,6 +199,12 @@ export function useAppStateMachine(): AppStateMachineResult {
   const lastOffRouteAnnouncedRef = useRef<number>(0);
   const interactionVersionRef = useRef<number>(0);
   const pendingNavigationDestinationRef = useRef<string | null>(null);
+  const pendingCaptureResolveRef = useRef<((imageBase64: string) => void) | null>(null);
+  const pendingCaptureRejectRef = useRef<((error: Error) => void) | null>(null);
+  const pendingCaptureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioUpstreamChunkCountRef = useRef<number>(0);
+  const audioUpstreamBytesRef = useRef<number>(0);
+  const lastAudioUpstreamLogRef = useRef<number>(0);
 
   const addLog = useCallback(
     (message: string, type: LogEntry['type'] = 'info') => {
@@ -257,14 +275,100 @@ export function useAppStateMachine(): AppStateMachineResult {
     }
   }, [transitionTo, addLog, stopNavigation]);
 
-  async function processNavigationImage(imageBase64: string, destinationText?: string) {
+  function logFeature3(message: string, type: LogEntry['type'] = 'info') {
+    console.log(message);
+    addLog(message, type);
+  }
+
+  function clearPendingGlassesCapture() {
+    if (pendingCaptureTimerRef.current !== null) {
+      clearTimeout(pendingCaptureTimerRef.current);
+      pendingCaptureTimerRef.current = null;
+    }
+    pendingCaptureResolveRef.current = null;
+    pendingCaptureRejectRef.current = null;
+  }
+
+  function resolvePendingGlassesCapture(imageBase64: string) {
+    const resolve = pendingCaptureResolveRef.current;
+    clearPendingGlassesCapture();
+    resolve?.(imageBase64);
+  }
+
+  function rejectPendingGlassesCapture(error: Error) {
+    const reject = pendingCaptureRejectRef.current;
+    clearPendingGlassesCapture();
+    reject?.(error);
+  }
+
+  function resetAudioUpstreamCounters() {
+    audioUpstreamChunkCountRef.current = 0;
+    audioUpstreamBytesRef.current = 0;
+    lastAudioUpstreamLogRef.current = 0;
+  }
+
+  function logAudioUpstream(audioBase64: string) {
+    const chunkBytes = estimateBase64Bytes(audioBase64);
+    audioUpstreamChunkCountRef.current += 1;
+    audioUpstreamBytesRef.current += chunkBytes;
+
+    const now = Date.now();
+    const shouldLog =
+      audioUpstreamChunkCountRef.current === 1 ||
+      now - lastAudioUpstreamLogRef.current >= 5000;
+
+    if (!shouldLog) return;
+
+    lastAudioUpstreamLogRef.current = now;
+    const message =
+      `[F1] audio upstream chunks=${audioUpstreamChunkCountRef.current} ` +
+      `bytes=${audioUpstreamBytesRef.current} lastChunkBytes=${chunkBytes} ` +
+      'format=PCM16_MONO sampleRate=16000';
+    console.log(message);
+    addLog(message);
+  }
+
+  async function requestGlassesCaptureImage(): Promise<string> {
+    if (pendingCaptureResolveRef.current) {
+      throw new Error('A glasses capture request is already pending');
+    }
+
+    const imagePromise = new Promise<string>((resolve, reject) => {
+      pendingCaptureResolveRef.current = resolve;
+      pendingCaptureRejectRef.current = reject;
+      pendingCaptureTimerRef.current = setTimeout(() => {
+        rejectPendingGlassesCapture(
+          new Error(`Timed out waiting for ESP32 image after CAPTURE (${GLASSES_CAPTURE_TIMEOUT_MS}ms)`),
+        );
+      }, GLASSES_CAPTURE_TIMEOUT_MS);
+    });
+
+    try {
+      await bleService.current.sendAudio('CAPTURE');
+    } catch (err: any) {
+      rejectPendingGlassesCapture(
+        new Error(`Failed to send CAPTURE to glasses: ${err?.message ?? err}`),
+      );
+    }
+
+    return imagePromise;
+  }
+
+  async function processNavigationImage(
+    imageBase64: string,
+    destinationText?: string,
+    source = 'unknown',
+  ) {
     if (isProcessingFrame.current) {
-      addLog('Nav: skipping frame (prev still processing)', 'warn');
+      logFeature3(formatFeature3FrameLog('dropped', source, imageBase64, 'inference_busy'), 'warn');
       return;
     }
     if (appStateRef.current !== AppState.FEATURE_3_NAVIGATION) return;
 
     isProcessingFrame.current = true;
+    const frameStartedAt = Date.now();
+    logFeature3(formatFeature3FrameLog('received', source, imageBase64));
+    logFeature3('[F3] inference start');
     try {
       let lat: number | undefined;
       let lon: number | undefined;
@@ -306,15 +410,26 @@ export function useAppStateMachine(): AppStateMachineResult {
       // 1. Chạy AI Nhận diện vật cản On-device
       let warningText = '';
       if (isInferenceAvailable()) {
+        const inferenceStartedAt = Date.now();
         const inferenceResult = await runInference(imageBase64);
         if (!inferenceResult.isReady) {
-          addLog('Nav: YOLO/ZipDepth inference chưa sẵn sàng hoặc bị lỗi', 'warn');
+          logFeature3(
+            `[F3] inference failed elapsedMs=${Date.now() - inferenceStartedAt}`,
+            'warn',
+          );
         } else {
-          addLog(`Nav: YOLO detected ${inferenceResult.objects.length} object(s)`);
-          warningText = warningsToVietnamese(processNavigationFrame(inferenceResult.objects));
+          logFeature3(
+            `[F3] YOLO: ${inferenceResult.objects.length} object(s) elapsedMs=${Date.now() - inferenceStartedAt}`,
+          );
+          inferenceResult.objects.forEach(obj => {
+            logFeature3(formatFeature3ObjectLog(obj));
+          });
+          const warnings = processNavigationFrame(inferenceResult.objects);
+          warningText = warningsToVietnamese(warnings);
+          logFeature3(formatFeature3WarningLog(warningText));
         }
       } else {
-        addLog('Nav: YOLO/ZipDepth inference unavailable', 'warn');
+        logFeature3('[F3] inference unavailable', 'warn');
       }
 
       // 2. Lấy hướng dẫn chỉ đường từ RouteGuide nếu user đã yêu cầu route
@@ -350,6 +465,7 @@ export function useAppStateMachine(): AppStateMachineResult {
     } catch (e) {
       addLog(`Nav frame error: ${e}`, 'error');
     } finally {
+      logFeature3(`[F3] inference end ${Date.now() - frameStartedAt}ms`);
       isProcessingFrame.current = false;
     }
   }
@@ -376,6 +492,7 @@ export function useAppStateMachine(): AppStateMachineResult {
       recordedAudioRef.current = null;
       capturedImageRef.current = null;
       audioChunksRef.current = [];
+      resetAudioUpstreamCounters();
 
       if (!isBleConnected) {
         addLog('Đang nghe từ Micro điện thoại (Chế độ độc lập)...');
@@ -630,17 +747,15 @@ export function useAppStateMachine(): AppStateMachineResult {
   async function captureAndSave() {
     try {
       addLog('Feature 2: capturing image...');
-      const isBleConnected =
-        isUsingMockBle() ||
-        bleService.current?.getConnectionState() === BleConnectionState.CONNECTED;
-
-      let photoToSave = capturedImageRef.current;
+      let photoToSave: string | null = null;
 
       // Request immediate photo capture from ESP32 camera if connected
       if (bleService.current?.getConnectionState() === BleConnectionState.CONNECTED) {
-        await bleService.current.sendAudio('CAPTURE').catch(err => {
-          console.warn('[BLE] Failed to send CAPTURE to glasses:', err);
-        });
+        addLog('Feature 2: requesting ESP32 CAPTURE frame...');
+        photoToSave = await requestGlassesCaptureImage();
+        const bytes = estimateBase64Bytes(photoToSave);
+        console.log(`[F2] image received source=ble bytes=${bytes}`);
+        addLog(`[F2] image received source=ble bytes=${bytes}`);
       } else if (!isUsingMockBle()) {
         // Phone camera fallback when not connected to glasses
         addLog('Không kết nối kính: Chụp ảnh bằng Camera điện thoại...');
@@ -654,10 +769,19 @@ export function useAppStateMachine(): AppStateMachineResult {
         } catch (camErr: any) {
           addLog(`Lỗi camera điện thoại: ${camErr?.message}`, 'warn');
         }
+      } else {
+        photoToSave = capturedImageRef.current;
+      }
+
+      if (!photoToSave) {
+        throw new Error('No image captured');
       }
 
       const savedFilename = await saveCapturedImage(photoToSave);
+      const savedBytes = estimateBase64Bytes(photoToSave);
+      console.log(`[F2] image saved filename=${savedFilename} bytes=${savedBytes}`);
       addLog(`Feature 2: image saved to local storage (${savedFilename})`);
+      addLog(`[F2] image saved filename=${savedFilename} bytes=${savedBytes}`);
       await speakViaBle(
         'Đã hoàn thành, bạn muốn chọn tính năng nào tiếp theo',
         bleService.current,
@@ -685,6 +809,9 @@ export function useAppStateMachine(): AppStateMachineResult {
       mode: destination ? 'route' : 'obstacle',
       destination,
     });
+    logFeature3(
+      `[F3] navigation start mode=${destination ? 'route' : 'obstacle'} intervalMs=${NAVIGATION_FRAME_INTERVAL_MS}`,
+    );
 
     if (mockService.current && isUsingMockBle()) {
       mockService.current.startAutoImage(NAVIGATION_FRAME_INTERVAL_MS);
@@ -706,7 +833,7 @@ export function useAppStateMachine(): AppStateMachineResult {
             setCurrentImage(photo);
             const pendingDestination = pendingNavigationDestinationRef.current ?? undefined;
             pendingNavigationDestinationRef.current = null;
-            processNavigationImage(photo, pendingDestination);
+            processNavigationImage(photo, pendingDestination, 'phone');
           }
         })
         .catch(err => {
@@ -718,11 +845,15 @@ export function useAppStateMachine(): AppStateMachineResult {
           stopNavigation();
           return;
         }
+        if (isProcessingFrame.current) {
+          logFeature3('[F3] frame dropped source=phone bytes=0 reason=inference_busy_before_capture', 'warn');
+          return;
+        }
         try {
           const photo = await capturePhonePhoto();
           if (photo && appStateRef.current === AppState.FEATURE_3_NAVIGATION) {
             setCurrentImage(photo);
-            await processNavigationImage(photo); // Subsequent frames don't need destinationText
+            await processNavigationImage(photo, undefined, 'phone'); // Subsequent frames don't need destinationText
           }
         } catch (err: any) {
           console.warn('[PhoneCamera Nav] capture error:', err);
@@ -762,22 +893,27 @@ export function useAppStateMachine(): AppStateMachineResult {
     const unsubImage = svc.onImageReceived(imageBase64 => {
       setCurrentImage(imageBase64);
       capturedImageRef.current = imageBase64;
+      if (pendingCaptureResolveRef.current) {
+        resolvePendingGlassesCapture(imageBase64);
+      }
 
       if (appStateRef.current === AppState.FEATURE_3_NAVIGATION) {
         const pendingDestination = pendingNavigationDestinationRef.current ?? undefined;
         pendingNavigationDestinationRef.current = null;
-        processNavigationImage(imageBase64, pendingDestination);
+        processNavigationImage(imageBase64, pendingDestination, isUsingMockBle() ? 'mock' : 'ble');
       }
     });
 
     const unsubAudio = svc.onAudioReceived(audioBase64 => {
       audioChunksRef.current.push(audioBase64);
       recordedAudioRef.current = audioBase64;
+      logAudioUpstream(audioBase64);
     });
 
     const unsubConnection = svc.onConnectionStateChange(state => {
       setConnectionState(state);
       if (state === BleConnectionState.CONNECTED) {
+        resetAudioUpstreamCounters();
         const name = svc.getConnectedDeviceName?.() || 'BSmart Glasses';
         setConnectedDeviceName(name);
         addLog(`Đã kết nối thành công '${name}'`, 'info');
@@ -803,6 +939,7 @@ export function useAppStateMachine(): AppStateMachineResult {
       unsubImage();
       unsubAudio();
       unsubConnection();
+      clearPendingGlassesCapture();
       stopNavigation();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -893,6 +1030,25 @@ export function useAppStateMachine(): AppStateMachineResult {
     }
   }, [addLog]);
 
+  const onDebugStartNavigation = useCallback(() => {
+    addLog('Debug trigger: F3 NAV_START data pipeline');
+    transitionTo(AppState.FEATURE_3_NAVIGATION);
+    startNavigation();
+  }, [addLog, transitionTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onDebugCaptureImage = useCallback(() => {
+    addLog('Debug trigger: F2 CAPTURE data pipeline');
+    transitionTo(AppState.FEATURE_2_CAPTURE);
+    captureAndSave();
+  }, [addLog, transitionTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onDebugStopNavigation = useCallback(() => {
+    addLog('Debug trigger: NAV_STOP / return to IDLE');
+    stopNavigation();
+    resetCooldowns();
+    transitionTo(AppState.IDLE);
+  }, [addLog, stopNavigation, transitionTo]);
+
   return {
     appState,
     connectionState,
@@ -911,5 +1067,8 @@ export function useAppStateMachine(): AppStateMachineResult {
     onMockImage,
     onConnect,
     onDisconnect,
+    onDebugStartNavigation,
+    onDebugCaptureImage,
+    onDebugStopNavigation,
   };
 }

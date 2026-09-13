@@ -197,12 +197,20 @@ Voice command matching is accent-insensitive and supports common ASR variants:
 
 ## 🔌 ESP32-S3 Firmware Flashing
 
-BSmart includes a one-click flashing script that automatically detects the ESP32-S3 COM port and flashes the release binaries (`bootloader.bin`, `partitions.bin`, and `firmware.bin`).
+BSmart includes a one-click flashing script that automatically detects the ESP32-S3 COM port, builds from current source when release artifacts are missing or stale, and flashes validated binaries (`bootloader.bin`, `partitions.bin`, and `firmware.bin`).
 
 ```bash
 # Make sure the ESP32 is connected via USB, then run at project folder:
 python flash_firmware.py
+
+# Select the port explicitly when more than one ESP32 adapter is present
+python flash_firmware.py --port COM7
+
+# Always rebuild from source before flashing
+python flash_firmware.py --rebuild
 ```
+
+The generated `release/firmware/manifest.json` records source metadata and SHA-256 hashes for all three binaries. A failed build never falls back to older artifacts.
 *Note: The script automatically installs required dependencies (`esptool`, `pyserial`) if they are missing.*
 
 ---

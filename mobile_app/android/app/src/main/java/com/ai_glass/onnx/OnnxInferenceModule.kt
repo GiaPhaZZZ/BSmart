@@ -14,8 +14,253 @@ import java.io.File
 import java.nio.FloatBuffer
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+
+internal data class YoloDetectionBox(
+    val classId: Int,
+    val score: Float,
+    val cx: Float,
+    val cy: Float,
+    val w: Float,
+    val h: Float
+) {
+    val x1 get() = cx - w / 2
+    val y1 get() = cy - h / 2
+    val x2 get() = cx + w / 2
+    val y2 get() = cy + h / 2
+    val area get() = w * h
+}
+
+internal object YoloOutputParser {
+    private const val INPUT_SIZE = 640f
+    private const val COCO_CLASS_COUNT = 80
+
+    fun parse(
+        outputTensor: Array<Array<FloatArray>>,
+        confidenceThreshold: Float = 0.5f,
+        iouThreshold: Float = 0.45f
+    ): List<YoloDetectionBox> {
+        val data = outputTensor.firstOrNull() ?: return emptyList()
+        val boxes = when {
+            isXyxyConfidenceClassOutput(data) -> parseXyxyConfidenceClass(data, confidenceThreshold)
+            isAnchorClassScoreOutput(data) -> parseAnchorClassScores(data, confidenceThreshold)
+            else -> throw IllegalArgumentException(
+                "Unsupported YOLO output shape [1,${data.size},${data.firstOrNull()?.size ?: 0}]"
+            )
+        }
+        return applyClassWiseNms(boxes, iouThreshold)
+    }
+
+    private fun isXyxyConfidenceClassOutput(data: Array<FloatArray>): Boolean {
+        return data.isNotEmpty() && data[0].size == 6 && data.size <= 1000
+    }
+
+    private fun isAnchorClassScoreOutput(data: Array<FloatArray>): Boolean {
+        return data.size >= 4 + COCO_CLASS_COUNT && data[0].isNotEmpty()
+    }
+
+    private fun parseXyxyConfidenceClass(
+        rows: Array<FloatArray>,
+        confidenceThreshold: Float
+    ): List<YoloDetectionBox> {
+        val boxes = mutableListOf<YoloDetectionBox>()
+        for (row in rows) {
+            if (row.size < 6) continue
+            val score = row[4]
+            val classId = row[5].toInt()
+            if (score < confidenceThreshold || classId !in 0 until COCO_CLASS_COUNT) continue
+
+            val left = row[0].coerceIn(0f, INPUT_SIZE)
+            val top = row[1].coerceIn(0f, INPUT_SIZE)
+            val right = row[2].coerceIn(0f, INPUT_SIZE)
+            val bottom = row[3].coerceIn(0f, INPUT_SIZE)
+            if (right <= left || bottom <= top) continue
+
+            boxes.add(fromXyxy(classId, score, left, top, right, bottom))
+        }
+        return boxes
+    }
+
+    private fun parseAnchorClassScores(
+        data: Array<FloatArray>,
+        confidenceThreshold: Float
+    ): List<YoloDetectionBox> {
+        val boxes = mutableListOf<YoloDetectionBox>()
+        val numAnchors = data[0].size
+        val numClasses = min(COCO_CLASS_COUNT, data.size - 4)
+        for (anchor in 0 until numAnchors) {
+            var maxScore = 0f
+            var maxClassId = -1
+            for (classId in 0 until numClasses) {
+                val score = data[4 + classId][anchor]
+                if (score > maxScore) {
+                    maxScore = score
+                    maxClassId = classId
+                }
+            }
+            if (maxScore < confidenceThreshold || maxClassId < 0) continue
+
+            val cx = normalizeCoordinate(data[0][anchor])
+            val cy = normalizeCoordinate(data[1][anchor])
+            val w = normalizeLength(data[2][anchor])
+            val h = normalizeLength(data[3][anchor])
+            if (w <= 0f || h <= 0f) continue
+
+            boxes.add(
+                YoloDetectionBox(
+                    classId = maxClassId,
+                    score = maxScore,
+                    cx = cx,
+                    cy = cy,
+                    w = w.coerceAtMost(1f),
+                    h = h.coerceAtMost(1f)
+                )
+            )
+        }
+        return boxes
+    }
+
+    private fun fromXyxy(
+        classId: Int,
+        score: Float,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float
+    ): YoloDetectionBox {
+        val width = (right - left) / INPUT_SIZE
+        val height = (bottom - top) / INPUT_SIZE
+        return YoloDetectionBox(
+            classId = classId,
+            score = score,
+            cx = ((left + right) / 2f / INPUT_SIZE).coerceIn(0f, 1f),
+            cy = ((top + bottom) / 2f / INPUT_SIZE).coerceIn(0f, 1f),
+            w = width.coerceIn(0f, 1f),
+            h = height.coerceIn(0f, 1f)
+        )
+    }
+
+    private fun normalizeCoordinate(value: Float): Float {
+        return if (value > 1.5f) (value / INPUT_SIZE).coerceIn(0f, 1f) else value.coerceIn(0f, 1f)
+    }
+
+    private fun normalizeLength(value: Float): Float {
+        return if (value > 1.5f) (value / INPUT_SIZE).coerceIn(0f, 1f) else value.coerceIn(0f, 1f)
+    }
+
+    private fun applyClassWiseNms(
+        boxes: List<YoloDetectionBox>,
+        iouThreshold: Float
+    ): List<YoloDetectionBox> {
+        val selectedBoxes = mutableListOf<YoloDetectionBox>()
+        for (box in boxes.sortedByDescending { it.score }) {
+            val suppress = selectedBoxes.any { selected ->
+                box.classId == selected.classId && computeIoU(box, selected) > iouThreshold
+            }
+            if (!suppress) selectedBoxes.add(box)
+        }
+        return selectedBoxes
+    }
+
+    private fun computeIoU(box1: YoloDetectionBox, box2: YoloDetectionBox): Float {
+        val interX1 = max(box1.x1, box2.x1)
+        val interY1 = max(box1.y1, box2.y1)
+        val interX2 = min(box1.x2, box2.x2)
+        val interY2 = min(box1.y2, box2.y2)
+        val interArea = max(0f, interX2 - interX1) * max(0f, interY2 - interY1)
+        if (interArea == 0f) return 0f
+        val unionArea = box1.area + box2.area - interArea
+        return if (unionArea <= 0f) 0f else interArea / unionArea
+    }
+}
+
+internal data class DepthRegion(
+    val left: Int,
+    val top: Int,
+    val rightExclusive: Int,
+    val bottomExclusive: Int
+) {
+    val width get() = rightExclusive - left
+    val height get() = bottomExclusive - top
+}
+
+internal object DepthFusion {
+    private const val CENTER_CROP_RATIO = 0.60f
+    private const val MIN_REGION_SIDE = 2
+    private const val MIN_REGION_AREA = 4
+
+    fun relativeDepthForBox(
+        box: YoloDetectionBox,
+        depthMap: Array<FloatArray>
+    ): Float? {
+        val region = bboxToDepthRegion(box, depthMap) ?: return null
+        val values = ArrayList<Float>(region.width * region.height)
+        for (row in region.top until region.bottomExclusive) {
+            val depthRow = depthMap[row]
+            for (col in region.left until region.rightExclusive) {
+                val value = depthRow[col]
+                if (!value.isNaN() && !value.isInfinite()) {
+                    values.add(value)
+                }
+            }
+        }
+        if (values.isEmpty()) return null
+        values.sort()
+        val mid = values.size / 2
+        return if (values.size % 2 == 1) {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2f
+        }
+    }
+
+    internal fun bboxToDepthRegion(
+        box: YoloDetectionBox,
+        depthMap: Array<FloatArray>
+    ): DepthRegion? {
+        val depthHeight = depthMap.size
+        val depthWidth = depthMap.firstOrNull()?.size ?: return null
+        if (depthHeight <= 0 || depthWidth <= 0) return null
+
+        val rawLeft = min(box.x1, box.x2).coerceIn(0f, 1f)
+        val rawTop = min(box.y1, box.y2).coerceIn(0f, 1f)
+        val rawRight = max(box.x1, box.x2).coerceIn(0f, 1f)
+        val rawBottom = max(box.y1, box.y2).coerceIn(0f, 1f)
+        if (rawRight <= rawLeft || rawBottom <= rawTop) return null
+
+        val fullRegion = DepthRegion(
+            left = floor(rawLeft * depthWidth).toInt().coerceIn(0, depthWidth),
+            top = floor(rawTop * depthHeight).toInt().coerceIn(0, depthHeight),
+            rightExclusive = ceil(rawRight * depthWidth).toInt().coerceIn(0, depthWidth),
+            bottomExclusive = ceil(rawBottom * depthHeight).toInt().coerceIn(0, depthHeight)
+        )
+        if (!isUsable(fullRegion)) return null
+
+        val centerWidth = max(MIN_REGION_SIDE, (fullRegion.width * CENTER_CROP_RATIO).roundToInt())
+            .coerceAtMost(fullRegion.width)
+        val centerHeight = max(MIN_REGION_SIDE, (fullRegion.height * CENTER_CROP_RATIO).roundToInt())
+            .coerceAtMost(fullRegion.height)
+        val left = fullRegion.left + (fullRegion.width - centerWidth) / 2
+        val top = fullRegion.top + (fullRegion.height - centerHeight) / 2
+        val centerRegion = DepthRegion(
+            left = left,
+            top = top,
+            rightExclusive = left + centerWidth,
+            bottomExclusive = top + centerHeight
+        )
+
+        return if (isUsable(centerRegion)) centerRegion else fullRegion
+    }
+
+    private fun isUsable(region: DepthRegion): Boolean {
+        return region.width >= MIN_REGION_SIDE &&
+            region.height >= MIN_REGION_SIDE &&
+            region.width * region.height >= MIN_REGION_AREA
+    }
+}
 
 class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -105,6 +350,14 @@ class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
 
     private fun shape2D(value: Array<FloatArray>): String =
         "[${value.size},${value.firstOrNull()?.size ?: 0}]"
+
+    private fun shape4D(value: Array<Array<Array<FloatArray>>>): String =
+        "[${value.size},${value.firstOrNull()?.size ?: 0}," +
+            "${value.firstOrNull()?.firstOrNull()?.size ?: 0}," +
+            "${value.firstOrNull()?.firstOrNull()?.firstOrNull()?.size ?: 0}]"
+
+    private fun formatBox(box: YoloDetectionBox): String =
+        "[x=${box.cx},y=${box.cy},w=${box.w},h=${box.h}]"
 
     private fun logStageStart(stage: String, details: String = ""): Long {
         android.util.Log.i(tag, "$stage status=start elapsedMs=0 $details".trim())
@@ -236,6 +489,33 @@ class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    private data class RgbTensorInput(
+        val resizedBitmap: Bitmap,
+        val tensor: OnnxTensor
+    )
+
+    private fun createRgbTensor(bitmap: Bitmap, inputSize: Int): RgbTensorInput {
+        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        val inputBuffer = FloatBuffer.allocate(1 * 3 * inputSize * inputSize)
+        val pixels = IntArray(inputSize * inputSize)
+        resized.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+        val rOffset = 0
+        val gOffset = inputSize * inputSize
+        val bOffset = 2 * inputSize * inputSize
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            inputBuffer.put(rOffset + i, ((p shr 16) and 0xFF) / 255.0f)
+            inputBuffer.put(gOffset + i, ((p shr 8) and 0xFF) / 255.0f)
+            inputBuffer.put(bOffset + i, (p and 0xFF) / 255.0f)
+        }
+        val tensor = OnnxTensor.createTensor(
+            environment,
+            inputBuffer,
+            longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
+        )
+        return RgbTensorInput(resized, tensor)
+    }
+
     @ReactMethod
     fun isNativeRuntimeAvailable(promise: Promise) {
         try {
@@ -272,31 +552,12 @@ class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(true)
     }
 
-    data class BBox(val classId: Int, val score: Float, val cx: Float, val cy: Float, val w: Float, val h: Float) {
-        val x1 get() = cx - w / 2
-        val y1 get() = cy - h / 2
-        val x2 get() = cx + w / 2
-        val y2 get() = cy + h / 2
-        val area get() = w * h
-    }
-
-    private fun computeIoU(box1: BBox, box2: BBox): Float {
-        val interX1 = max(box1.x1, box2.x1)
-        val interY1 = max(box1.y1, box2.y1)
-        val interX2 = min(box1.x2, box2.x2)
-        val interY2 = min(box1.y2, box2.y2)
-        val interArea = max(0f, interX2 - interX1) * max(0f, interY2 - interY1)
-        if (interArea == 0f) return 0f
-        val unionArea = box1.area + box2.area - interArea
-        return interArea / unionArea
-    }
-
     @ReactMethod
     fun runObjectDetection(base64Image: String, promise: Promise) {
         Thread {
             var bitmap: Bitmap? = null
-            var resized: Bitmap? = null
-            var inputTensor: OnnxTensor? = null
+            var yoloInput: RgbTensorInput? = null
+            var depthInput: RgbTensorInput? = null
             try {
                 if (isMemoryTight()) {
                     releaseVlmModelsInternal()
@@ -309,78 +570,84 @@ class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
                     return@Thread
                 }
                 val decodedBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                bitmap = BitmapFactory.decodeStream(ByteArrayInputStream(decodedBytes))
-                if (bitmap == null) {
+                val sourceBitmap = BitmapFactory.decodeStream(ByteArrayInputStream(decodedBytes))
+                if (sourceBitmap == null) {
                     promise.reject("INVALID_IMAGE", "Could not decode base64 into Bitmap")
                     return@Thread
                 }
-                resized = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
-                val inputBuffer = FloatBuffer.allocate(1 * 3 * 640 * 640)
-                val pixels = IntArray(640 * 640)
-                resized.getPixels(pixels, 0, 640, 0, 0, 640, 640)
-                val rOffset = 0
-                val gOffset = 640 * 640
-                val bOffset = 2 * 640 * 640
-                for (i in pixels.indices) {
-                    val p = pixels[i]
-                    inputBuffer.put(rOffset + i, ((p shr 16) and 0xFF) / 255.0f)
-                    inputBuffer.put(gOffset + i, ((p shr 8) and 0xFF) / 255.0f)
-                    inputBuffer.put(bOffset + i, (p and 0xFF) / 255.0f)
-                }
-                inputTensor = OnnxTensor.createTensor(environment, inputBuffer, longArrayOf(1, 3, 640, 640))
+                bitmap = sourceBitmap
+                yoloInput = createRgbTensor(sourceBitmap, 640)
                 val inputName = session.inputNames.iterator().next()
-                val output = session.run(mapOf(inputName to inputTensor))
-                val outputTensor = output[0].value as Array<Array<FloatArray>>
-                val data = outputTensor[0]
-                val boxes = mutableListOf<BBox>()
-                val numClasses = 80
-                val numAnchors = 8400
-                for (i in 0 until numAnchors) {
-                    var maxScore = 0f
-                    var maxClassId = -1
-                    for (c in 0 until numClasses) {
-                        val score = data[4 + c][i]
-                        if (score > maxScore) {
-                            maxScore = score
-                            maxClassId = c
-                        }
-                    }
-                    if (maxScore > 0.5f) {
-                        boxes.add(BBox(maxClassId, maxScore, data[0][i] / 640f, data[1][i] / 640f, data[2][i] / 640f, data[3][i] / 640f))
-                    }
+                val output = session.run(mapOf(inputName to yoloInput.tensor))
+                val selectedBoxes = try {
+                    val outputTensor = output[0].value as Array<Array<FloatArray>>
+                    YoloOutputParser.parse(outputTensor)
+                } finally {
+                    output.close()
                 }
-                output.close()
-                boxes.sortByDescending { it.score }
-                val selectedBoxes = mutableListOf<BBox>()
-                for (box in boxes) {
-                    var suppress = false
-                    for (selBox in selectedBoxes) {
-                        if (box.classId == selBox.classId && computeIoU(box, selBox) > 0.45f) {
-                            suppress = true
-                            break
-                        }
-                    }
-                    if (!suppress) selectedBoxes.add(box)
+
+                if (selectedBoxes.isEmpty()) {
+                    promise.resolve(Arguments.createArray())
+                    return@Thread
                 }
+
+                if (!autoLoadModel("zipdepth", "models/navigation/zipdepth.onnx")) {
+                    promise.reject("MODEL_NOT_LOADED", "zipdepth model not loaded")
+                    return@Thread
+                }
+                val depthSession = sessions["zipdepth"]
+                if (depthSession == null) {
+                    promise.reject("MODEL_NOT_LOADED", "zipdepth model not loaded")
+                    return@Thread
+                }
+                depthInput = createRgbTensor(sourceBitmap, 384)
+                val depthInputName = depthSession.inputNames.iterator().next()
+                val depthOutput = depthSession.run(mapOf(depthInputName to depthInput.tensor))
+
                 val resultsArray = Arguments.createArray()
-                for (box in selectedBoxes) {
-                    val map = Arguments.createMap()
-                    map.putString("class", cocoLabelsVi[box.classId] ?: "vật thể")
-                    map.putDouble("confidence", box.score.toDouble())
-                    map.putDouble("x", box.cx.toDouble())
-                    map.putDouble("y", box.cy.toDouble())
-                    map.putDouble("width", box.w.toDouble())
-                    map.putDouble("height", box.h.toDouble())
-                    map.putDouble("depthScore", 0.5)
-                    resultsArray.pushMap(map)
+                try {
+                    val depthTensor = depthOutput[0].value as Array<Array<Array<FloatArray>>>
+                    val depthMap = depthTensor[0][0]
+                    android.util.Log.i(
+                        tag,
+                        "[F3] depthOutputShape=${shape4D(depthTensor)} depthMapShape=${shape2D(depthMap)}"
+                    )
+                    for (box in selectedBoxes) {
+                        val className = cocoLabelsVi[box.classId] ?: "vật thể"
+                        val relativeDepth = DepthFusion.relativeDepthForBox(box, depthMap)
+                        if (relativeDepth == null) {
+                            android.util.Log.w(
+                                tag,
+                                "[F3] skip class=$className bbox=${formatBox(box)} depth=invalid"
+                            )
+                            continue
+                        }
+                        val map = Arguments.createMap()
+                        map.putString("class", className)
+                        map.putDouble("confidence", box.score.toDouble())
+                        map.putDouble("x", box.cx.toDouble())
+                        map.putDouble("y", box.cy.toDouble())
+                        map.putDouble("width", box.w.toDouble())
+                        map.putDouble("height", box.h.toDouble())
+                        map.putDouble("depthScore", relativeDepth.toDouble())
+                        android.util.Log.i(
+                            tag,
+                            "[F3] $className bbox=${formatBox(box)} depth=$relativeDepth"
+                        )
+                        resultsArray.pushMap(map)
+                    }
+                } finally {
+                    depthOutput.close()
                 }
                 promise.resolve(resultsArray)
             } catch (e: Exception) {
-                promise.reject("INFERENCE_ERROR", "YOLO on-device inference failed: ${e.message}", e)
+                promise.reject("INFERENCE_ERROR", "YOLO+ZipDepth on-device inference failed: ${e.message}", e)
             } finally {
-                inputTensor?.close()
+                depthInput?.tensor?.close()
+                depthInput?.resizedBitmap?.recycle()
+                yoloInput?.tensor?.close()
+                yoloInput?.resizedBitmap?.recycle()
                 bitmap?.recycle()
-                resized?.recycle()
             }
         }.start()
     }
@@ -389,8 +656,7 @@ class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
     fun runDepthEstimation(base64Image: String, promise: Promise) {
         Thread {
             var bitmap: Bitmap? = null
-            var resized: Bitmap? = null
-            var inputTensor: OnnxTensor? = null
+            var depthInput: RgbTensorInput? = null
             try {
                 if (isMemoryTight()) {
                     releaseVlmModelsInternal()
@@ -403,47 +669,48 @@ class OnnxInferenceModule(private val reactContext: ReactApplicationContext) :
                     return@Thread
                 }
                 val decodedBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                bitmap = BitmapFactory.decodeStream(ByteArrayInputStream(decodedBytes))
-                if (bitmap == null) {
+                val sourceBitmap = BitmapFactory.decodeStream(ByteArrayInputStream(decodedBytes))
+                if (sourceBitmap == null) {
                     promise.reject("INVALID_IMAGE", "Could not decode base64 into Bitmap")
                     return@Thread
                 }
-                resized = Bitmap.createScaledBitmap(bitmap, 384, 384, true)
-                val inputBuffer = FloatBuffer.allocate(1 * 3 * 384 * 384)
-                val pixels = IntArray(384 * 384)
-                resized.getPixels(pixels, 0, 384, 0, 0, 384, 384)
-                val rOffset = 0
-                val gOffset = 384 * 384
-                val bOffset = 2 * 384 * 384
-                for (i in pixels.indices) {
-                    val p = pixels[i]
-                    inputBuffer.put(rOffset + i, ((p shr 16) and 0xFF) / 255.0f)
-                    inputBuffer.put(gOffset + i, ((p shr 8) and 0xFF) / 255.0f)
-                    inputBuffer.put(bOffset + i, (p and 0xFF) / 255.0f)
-                }
-                inputTensor = OnnxTensor.createTensor(environment, inputBuffer, longArrayOf(1, 3, 384, 384))
+                bitmap = sourceBitmap
+                depthInput = createRgbTensor(sourceBitmap, 384)
                 val inputName = session.inputNames.iterator().next()
-                val output = session.run(mapOf(inputName to inputTensor))
+                val output = session.run(mapOf(inputName to depthInput.tensor))
                 val outputTensor = output[0].value as Array<Array<Array<FloatArray>>>
                 val depthMap = outputTensor[0][0]
+                var minDepth = Float.POSITIVE_INFINITY
+                var maxDepth = Float.NEGATIVE_INFINITY
                 var sum = 0f
-                for (r in 0 until 384) {
-                    for (c in 0 until 384) {
-                        sum += depthMap[r][c]
+                var count = 0
+                for (row in depthMap.indices) {
+                    for (col in depthMap[row].indices) {
+                        val value = depthMap[row][col]
+                        if (!value.isNaN() && !value.isInfinite()) {
+                            minDepth = min(minDepth, value)
+                            maxDepth = max(maxDepth, value)
+                            sum += value
+                            count += 1
+                        }
                     }
                 }
                 output.close()
                 val map = Arguments.createMap().apply {
                     putBoolean("success", true)
-                    putDouble("relativeDepthMean", (sum / (384 * 384)).toDouble())
+                    putString("outputShape", shape4D(outputTensor))
+                    putString("depthMapShape", shape2D(depthMap))
+                    putDouble("minDepth", minDepth.toDouble())
+                    putDouble("maxDepth", maxDepth.toDouble())
+                    putDouble("meanDepth", if (count > 0) (sum / count).toDouble() else Double.NaN)
                 }
                 promise.resolve(map)
             } catch (e: Exception) {
                 promise.reject("DEPTH_ERROR", "ZipDepth inference failed: ${e.message}", e)
             } finally {
-                inputTensor?.close()
+                depthInput?.tensor?.close()
+                depthInput?.resizedBitmap?.recycle()
                 bitmap?.recycle()
-                resized?.recycle()
             }
         }.start()
     }

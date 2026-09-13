@@ -2,6 +2,12 @@
  * BSmart On-Device AI & Navigation Inference Tests (MOD-01..04)
  */
 
+declare const require: (moduleName: string) => any;
+declare const __dirname: string;
+
+const fs = require('fs');
+const path = require('path');
+
 import {
   isInferenceAvailable,
   setInferenceAvailable,
@@ -74,6 +80,17 @@ describe('OnDeviceInference Service (MOD-03 & MOD-04)', () => {
       expect(obj.x).toBeLessThanOrEqual(1);
       expect(obj.depthScore).toBeDefined();
     });
+  });
+
+  test('runInference does not assign one global depth value to all native objects', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../src/services/navigation/OnDeviceInference.ts'),
+      'utf8',
+    );
+
+    expect(source).not.toContain('relativeDepthMean');
+    expect(source).not.toMatch(/depthScore:\s*relativeDepthMean/);
+    expect(source).not.toMatch(/runDepthEstimation\(imageBase64\)/);
   });
 
   test('integration: runInference output feeds directly into NavigationEngine', async () => {

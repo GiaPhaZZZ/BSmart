@@ -47,6 +47,9 @@ export function MainScreen() {
     onMockImage,
     onConnect,
     onDisconnect,
+    onDebugStartNavigation,
+    onDebugCaptureImage,
+    onDebugStopNavigation,
   } = useAppStateMachine();
 
   // Settings & Modes
@@ -122,6 +125,33 @@ export function MainScreen() {
               <Text style={styles.devSub}>
                 {isMockBle ? 'Đang dùng Mock BLE' : 'Đang dùng Real BLE'}
               </Text>
+            </View>
+
+            <View style={styles.pipelineControls}>
+              <Text style={styles.pipelineTitle}>Pipeline Controls</Text>
+              <View style={styles.pipelineRow}>
+                <TouchableOpacity
+                  style={[styles.pipelineButton, styles.pipelineButtonNav]}
+                  onPress={onDebugStartNavigation}
+                  accessibilityLabel="debug-f3-nav-start"
+                >
+                  <Text style={styles.pipelineButtonText}>F3 NAV_START</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.pipelineButton, styles.pipelineButtonCapture]}
+                  onPress={onDebugCaptureImage}
+                  accessibilityLabel="debug-f2-capture"
+                >
+                  <Text style={styles.pipelineButtonText}>F2 CAPTURE</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.pipelineButton, styles.pipelineButtonStop]}
+                  onPress={onDebugStopNavigation}
+                  accessibilityLabel="debug-nav-stop"
+                >
+                  <Text style={styles.pipelineButtonText}>NAV_STOP</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Mock BLE Controls (only when Mock BLE is enabled) */}
@@ -226,6 +256,46 @@ const styles = StyleSheet.create({
   devSub: {
     color: '#8B949E',
     fontSize: 11,
+  },
+  pipelineControls: {
+    backgroundColor: '#0D1117',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#30363D',
+    padding: 12,
+    marginBottom: 12,
+  },
+  pipelineTitle: {
+    color: '#6E7681',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  pipelineRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  pipelineButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  pipelineButtonNav: {
+    backgroundColor: '#1565C0',
+  },
+  pipelineButtonCapture: {
+    backgroundColor: '#1B5E20',
+  },
+  pipelineButtonStop: {
+    backgroundColor: '#B71C1C',
+  },
+  pipelineButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   logContainer: {
     height: 280,

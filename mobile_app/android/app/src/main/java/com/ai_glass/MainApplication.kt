@@ -16,6 +16,8 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           // Register BSmart native ONNX Runtime module
           add(com.ai_glass.onnx.OnnxInferencePackage())
+          // Register BSmart llama.cpp GGUF VLM module for opt-in Feature 1 experiments
+          add(com.ai_glass.llama.LlamaCppVlmPackage())
           // Register BSmart native Audio Player module for activation voice clips
           add(com.ai_glass.audio.AudioPlayerPackage())
           // Register BSmart native Phone Camera module for standalone mode

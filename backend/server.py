@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
 """
-BSmart FastAPI Backend Server
-Wraps pre-trained models (PhoWhisper, SmolVLM2, EnViT5, YOLO26s, ZipDepth, Piper TTS)
-into RESTful API endpoints for the BSmart mobile app.
+BSmart FastAPI backend.
+
+This server keeps the mobile-facing API stable while delegating Feature 1 model
+work to backend.pipelines.visual_qa:
+  - PhoWhisper CT2 INT8 for ASR when audio is posted to /qa
+  - EnViT5 CT2 INT8 for VI<->EN translation
+  - SmolVLM2 quantized GGUF through llama.cpp llama-server
+  - Piper TTS when an audio response is requested
 """
 
+from __future__ import annotations
+
+import base64
 import os
 import sys
 import tempfile
-import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 MODELS_DIR = REPO_ROOT / "models"
 
-# Ensure current directory and pipelines are in sys.path
 for p in [str(BASE_DIR), str(REPO_ROOT)]:
     if p not in sys.path:
         sys.path.insert(0, p)
+
+from pipelines import visual_qa as f1  # noqa: E402
 
 app = FastAPI(
     title="BSmart AI Backend",
@@ -33,7 +40,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Enable CORS for Mobile App access across local network
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,220 +48,148 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global model caches
-ASR_PROCESSOR = None
-ASR_MODEL = None
-VLM_MODELS = None
-TRANSLATE_MODELS = None
-NAV_PIPELINE = None
-VLM_LOCK = threading.Lock()
-TRANSLATE_LOCK = threading.Lock()
-
 
 def get_asr_model():
-    """Lazy-load PhoWhisper CT2 ASR model."""
-    global ASR_PROCESSOR, ASR_MODEL
-    if ASR_MODEL is not None:
-        return ASR_PROCESSOR, ASR_MODEL
-
-    try:
-        from pipelines import voice_control as f0
-        if f0.ASR_CT2_DIR.exists():
-            print("[Backend] Loading PhoWhisper ASR model...")
-            whisper_processor, asr_model = f0._load_asr()
-            f0.MODELS = (whisper_processor, asr_model)
-            ASR_PROCESSOR, ASR_MODEL = whisper_processor, asr_model
-            print("[Backend] PhoWhisper ASR model loaded successfully.")
-            return ASR_PROCESSOR, ASR_MODEL
-        else:
-            print(f"[Backend Warning] ASR model dir {f0.ASR_CT2_DIR} not found.")
-    except Exception as e:
-        print(f"[Backend Warning] Failed to load ASR model: {e}")
-        traceback.print_exc()
-
-    return None, None
+    """Lazy-load PhoWhisper CT2 ASR through the Feature 1 pipeline module."""
+    return f1.get_asr_model()
 
 
 def get_vlm_model():
-    """Lazy-load real SmolVLM2 VQA components. No demo or fallback responses."""
-    global VLM_MODELS
-    if VLM_MODELS is not None:
-        return VLM_MODELS
-
-    with VLM_LOCK:
-        if VLM_MODELS is not None:
-            return VLM_MODELS
-
-        try:
-            import torch
-            from transformers import AutoModelForImageTextToText, AutoProcessor
-
-            model_id = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype = torch.float16 if device == "cuda" else torch.float32
-
-            print(f"[Backend] Loading SmolVLM2 VQA model on {device}...")
-            processor = AutoProcessor.from_pretrained(model_id, local_files_only=True)
-            try:
-                model = AutoModelForImageTextToText.from_pretrained(
-                    model_id,
-                    dtype=dtype,
-                    _attn_implementation="sdpa",
-                    local_files_only=True,
-                )
-            except Exception as sdpa_error:
-                print(f"[Backend] SmolVLM2 sdpa unavailable, using eager attention: {sdpa_error}")
-                model = AutoModelForImageTextToText.from_pretrained(
-                    model_id,
-                    dtype=dtype,
-                    _attn_implementation="eager",
-                    local_files_only=True,
-                )
-            model = model.to(device)
-            model.eval()
-            VLM_MODELS = {
-                "processor": processor,
-                "model": model,
-                "device": device,
-                "dtype": dtype,
-                "model_id": model_id,
-            }
-            print("[Backend] SmolVLM2 VQA model loaded successfully.")
-            return VLM_MODELS
-        except Exception as e:
-            print(f"[Backend Error] Failed to load SmolVLM2 VQA model: {e}")
-            traceback.print_exc()
-            raise RuntimeError(f"SmolVLM2 model load failed: {e}") from e
+    """Lazy-connect to SmolVLM2 GGUF through llama-server."""
+    return f1.get_vlm_model()
 
 
 def get_translation_model():
-    """Lazy-load existing EnViT5 CTranslate2 translation components."""
-    global TRANSLATE_MODELS
-    if TRANSLATE_MODELS is not None:
-        return TRANSLATE_MODELS
-
-    with TRANSLATE_LOCK:
-        if TRANSLATE_MODELS is not None:
-            return TRANSLATE_MODELS
-
-        try:
-            import ctranslate2
-            from pipelines import visual_qa as f1
-
-            if not f1.TRANSLATE_CT2_DIR.exists():
-                raise FileNotFoundError(f"EnViT5 CT2 model not found: {f1.TRANSLATE_CT2_DIR}")
-
-            print("[Backend] Loading EnViT5 translation model...")
-            tokenizer = f1.load_envit5_tokenizer(f1.TRANSLATE_MODEL_PATH)
-            translator = ctranslate2.Translator(str(f1.TRANSLATE_CT2_DIR), device=f1.DEVICE)
-            TRANSLATE_MODELS = {
-                "tokenizer": tokenizer,
-                "translator": translator,
-                "model_id": f1.TRANSLATE_MODEL_PATH,
-                "max_length": f1.TRANSLATE_MAX_LENGTH,
-            }
-            print("[Backend] EnViT5 translation model loaded successfully.")
-            return TRANSLATE_MODELS
-        except Exception as e:
-            print(f"[Backend Error] Failed to load EnViT5 translation model: {e}")
-            traceback.print_exc()
-            raise RuntimeError(f"EnViT5 translation model load failed: {e}") from e
+    """Lazy-load EnViT5 CT2 translation through the Feature 1 pipeline module."""
+    return f1.get_translation_model()
 
 
-def translate_text(text: str, src_lang: str) -> str:
-    """Translate text with the existing EnViT5 vi/en CT2 pipeline."""
-    if src_lang not in {"vi", "en"}:
-        raise ValueError(f"Unsupported translation source language: {src_lang}")
-
-    models = get_translation_model()
-    tokenizer = models["tokenizer"]
-    translator = models["translator"]
-    max_length = models["max_length"]
-
-    prefixed = f"{src_lang}: {text.strip()}"
-    input_ids = tokenizer.encode(prefixed, truncation=True, max_length=max_length)
-    source_tokens = tokenizer.convert_ids_to_tokens(input_ids)
-    results = translator.translate_batch([source_tokens], max_decoding_length=max_length)
-    output_tokens = results[0].hypotheses[0]
-    output_ids = tokenizer.convert_tokens_to_ids(output_tokens)
-    translated = tokenizer.decode(output_ids, skip_special_tokens=True).split(":", 1)[-1].strip()
-
-    if not translated:
-        raise RuntimeError("EnViT5 returned empty translation")
-    return translated
+def speech_to_text_vi(audio_path: Path, timings: Optional[f1.StageTimings] = None) -> str:
+    return f1.speech_to_text_vi(audio_path, timings=timings)
 
 
-def run_vlm_question(image_path: Path, question: str) -> str:
-    """Run real SmolVLM2 visual QA for an image and text question."""
-    try:
-        import torch
-        from PIL import Image
-    except Exception as e:
-        raise RuntimeError(f"Missing VQA runtime dependency: {e}") from e
+def translate_text(
+    text: str,
+    src_lang: str,
+    timings: Optional[f1.StageTimings] = None,
+    timing_key: Optional[str] = None,
+) -> str:
+    return f1.translate(text, src_lang, timings=timings, timing_key=timing_key)
 
-    vlm = get_vlm_model()
-    processor = vlm["processor"]
-    model = vlm["model"]
-    dtype = vlm["dtype"]
 
-    image = Image.open(image_path).convert("RGB")
-    prompt = (
-        f"{question.strip()} "
-        "Answer in one concise, complete English sentence. "
-        "Start with 'There is', 'There are', or 'No,' when appropriate. "
-        "Do not invent details not visible in the image."
-    )
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": prompt},
-            ],
+def run_vlm_question(
+    image_path: Path,
+    question_en: str,
+    timings: Optional[f1.StageTimings] = None,
+) -> str:
+    return f1.run_vlm_question(image_path, question_en, timings=timings)
+
+
+def synthesize_speech_vi(
+    text: str,
+    out_path: Path,
+    timings: Optional[f1.StageTimings] = None,
+) -> None:
+    f1.speak_vi(text, out_path, timings=timings)
+
+
+async def _save_upload(
+    upload: UploadFile,
+    default_name: str,
+    tmp_paths: list[Path],
+    timings: f1.StageTimings,
+) -> Path:
+    suffix = Path(upload.filename or default_name).suffix or Path(default_name).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        path = Path(tmp.name)
+        with timings.track("request_io"):
+            tmp.write(await upload.read())
+    tmp_paths.append(path)
+    return path
+
+
+def _timing_payload(timings: f1.StageTimings, request_started: float) -> dict:
+    return f1.build_timing_payload(timings, time.perf_counter() - request_started)
+
+
+def _log_timing(prefix: str, payload: dict) -> None:
+    print(f"{prefix}\n{f1.format_latency_report(payload)}")
+
+
+def _raise_feature1_error(
+    *,
+    error: Exception,
+    stage: str,
+    timings: f1.StageTimings,
+    request_started: float,
+) -> None:
+    payload = _timing_payload(timings, request_started)
+    _log_timing(f"[Backend][Feature1] failed stage={stage}", payload)
+
+    if isinstance(error, f1.InvalidImageError):
+        status_code = 400
+        code = "invalid_image"
+    elif isinstance(error, f1.EmptyTranscriptError):
+        status_code = 422
+        code = "empty_transcript"
+    elif isinstance(error, f1.LlamaServerTimeout):
+        status_code = 504
+        code = "qa_inference_timeout"
+    elif isinstance(error, f1.LlamaServerUnavailable):
+        status_code = 503
+        code = "llama_server_unavailable"
+    elif isinstance(error, f1.LlamaServerResponseError):
+        status_code = 502
+        code = "llama_server_bad_response"
+    else:
+        status_code = 500
+        code = "feature1_stage_failed"
+
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "error": code,
+            "stage": stage,
+            "message": str(error),
+            "timings": payload,
         },
-    ]
-    text_prompt = processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=False,
-    )
+    ) from error
 
-    with torch.inference_mode():
-        inputs = processor(text=text_prompt, images=[image], return_tensors="pt")
-        inputs = inputs.to(model.device, dtype=dtype)
-        generated_ids = model.generate(
-            **inputs,
-            do_sample=False,
-            num_beams=1,
-            max_new_tokens=80,
-            min_new_tokens=3,
-            repetition_penalty=1.2,
-            no_repeat_ngram_size=3,
-        )
-        input_len = inputs["input_ids"].shape[1]
-        output_ids = generated_ids[:, input_len:]
-        answer = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
-    if not answer:
-        raise RuntimeError("SmolVLM2 returned an empty answer")
-    return answer
+def _delete_temp_files(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            if path.exists():
+                os.remove(path)
+        except OSError:
+            pass
 
 
 @app.get("/")
 @app.get("/health")
 def health_check():
-    """Health check endpoint."""
-    asr_available = (MODELS_DIR / "phowhisper-ct2-int8").exists() or (BASE_DIR / "phowhisper-ct2-int8").exists()
-    vlm_available = (MODELS_DIR / "envit5-ct2-int8").exists() or (BASE_DIR / "envit5-ct2-int8").exists()
-    yolo_available = (MODELS_DIR / "yolo26s.pt").exists() or (BASE_DIR / "yolo26s.pt").exists()
-
+    """Health check endpoint. This probes llama-server without starting it."""
+    llama_info = f1.get_llama_runtime_info(check_health=True)
     return {
         "status": "ok",
         "service": "BSmart AI Backend",
         "models": {
-            "phowhisper_int8": asr_available,
-            "envit5_int8": vlm_available,
-            "yolo26s": yolo_available,
+            "phowhisper_int8": f1.ASR_CT2_DIR.exists(),
+            "envit5_int8": f1.TRANSLATE_CT2_DIR.exists(),
+            "piper_vi_voice": f1.PIPER_VOICE_PATH.exists(),
+            "yolo26s": (MODELS_DIR / "yolo26s.pt").exists() or (BASE_DIR / "yolo26s.pt").exists(),
+            "smolvlm2_gguf": {
+                "mode": llama_info["mode"],
+                "model": llama_info["model"],
+                "mmproj": llama_info["mmproj"],
+                "quantization": llama_info["quantization"],
+                "server_bin": llama_info["server_bin"],
+                "url": llama_info["url"],
+                "healthy": llama_info.get("healthy", False),
+                "auto_start": llama_info["auto_start"],
+                "request_timeout_s": llama_info["request_timeout_s"],
+                "startup_timeout_s": llama_info["startup_timeout_s"],
+            },
         },
     }
 
@@ -265,146 +199,216 @@ async def transcribe_endpoint(
     audio: Optional[UploadFile] = File(None),
     audio_file: Optional[UploadFile] = File(None),
 ):
-    """
-    Speech-To-Text Endpoint:
-    Receives an audio file (WAV/MP3/PCM) and returns transcribed Vietnamese text.
-    """
+    """Speech-to-text endpoint for real PhoWhisper CT2 inference."""
     file_to_process = audio or audio_file
     if not file_to_process:
-        raise HTTPException(status_code=400, detail="No audio file provided in request (field 'audio').")
+        raise HTTPException(status_code=400, detail={"error": "missing_audio"})
 
-    # Save uploaded file to temp file
-    suffix = Path(file_to_process.filename or "recording.wav").suffix or ".wav"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file_to_process.read()
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    timings = f1.StageTimings()
+    request_started = time.perf_counter()
+    tmp_paths: list[Path] = []
 
     try:
-        processor, model = get_asr_model()
-        if processor and model:
-            from pipelines import voice_control as f0
-            transcribed_text = f0.speech_to_text_vi(tmp_path)
-            fid, hits, _ = f0.match_feature(transcribed_text)
-            return {
-                "text": transcribed_text,
-                "matched_feature": fid,
-                "matched_keywords": hits,
-            }
-        else:
-            # Fallback if INT8 model not converted yet
-            return {
-                "text": "Mở tính năng 1",
-                "matched_feature": 1,
-                "matched_keywords": ["tính năng 1"],
-                "warning": "PhoWhisper INT8 model not found. Using fallback text.",
-            }
-    except Exception as e:
-        print(f"[Backend Error] Transcribe failed: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Transcribe processing error: {str(e)}")
+        tmp_audio_path = await _save_upload(file_to_process, "recording.wav", tmp_paths, timings)
+        try:
+            transcribed_text = speech_to_text_vi(tmp_audio_path, timings=timings)
+        except Exception as e:
+            print(f"[Backend Error] Transcribe failed: {e}")
+            traceback.print_exc()
+            _raise_feature1_error(
+                error=e,
+                stage="stt",
+                timings=timings,
+                request_started=request_started,
+            )
+
+        from pipelines import voice_control as f0
+
+        fid, hits, _ = f0.match_feature(transcribed_text)
+        payload = _timing_payload(timings, request_started)
+        _log_timing("[Backend][Transcribe] latency", payload)
+        return {
+            "text": transcribed_text,
+            "matched_feature": fid,
+            "matched_keywords": hits,
+            "timings": payload,
+        }
     finally:
-        if tmp_path.exists():
-            os.remove(tmp_path)
+        _delete_temp_files(tmp_paths)
 
 
 @app.post("/qa")
 async def qa_endpoint(
     image: Optional[UploadFile] = File(None),
     question: Optional[str] = Form(None),
+    audio: Optional[UploadFile] = File(None),
+    audio_file: Optional[UploadFile] = File(None),
+    return_audio: bool = Form(False),
 ):
     """
-    Visual QA Chatbot Endpoint:
-    Receives an image and a text question. Returns real SmolVLM2 output only.
+    Feature 1 endpoint.
+
+    Existing mobile contract is preserved:
+      image + question -> JSON text answer.
+
+    Full backend pipeline is also supported:
+      image + audio -> STT -> VQA -> Piper WAV, returned as base64 in JSON.
     """
-    tmp_image_path = None
+    request_started = time.perf_counter()
+    timings = f1.StageTimings()
+    tmp_paths: list[Path] = []
 
     try:
         if image is None:
             raise HTTPException(status_code=400, detail={"error": "missing_image"})
-        if question is None or not question.strip():
-            raise HTTPException(status_code=400, detail={"error": "missing_question"})
 
-        suffix = Path(image.filename or "image.jpg").suffix or ".jpg"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_img:
-            tmp_img.write(await image.read())
-            tmp_image_path = Path(tmp_img.name)
+        tmp_image_path = await _save_upload(image, "image.jpg", tmp_paths, timings)
+        try:
+            f1.validate_image_file(tmp_image_path)
+        except Exception as e:
+            print(f"[Backend Error] Image validation failed: {e}")
+            if not isinstance(e, f1.InvalidImageError):
+                traceback.print_exc()
+            _raise_feature1_error(
+                error=e,
+                stage="image_preparation",
+                timings=timings,
+                request_started=request_started,
+            )
+
+        audio_upload = audio or audio_file
+        question_vi = (question or "").strip()
+        audio_was_input = audio_upload is not None
+
+        if not question_vi and audio_upload is not None:
+            tmp_audio_path = await _save_upload(audio_upload, "question.wav", tmp_paths, timings)
+            try:
+                question_vi = speech_to_text_vi(tmp_audio_path, timings=timings).strip()
+            except Exception as e:
+                print(f"[Backend Error] Question STT failed: {e}")
+                if not isinstance(e, f1.Feature1PipelineError):
+                    traceback.print_exc()
+                _raise_feature1_error(
+                    error=e,
+                    stage="stt",
+                    timings=timings,
+                    request_started=request_started,
+                )
+            if not question_vi:
+                _raise_feature1_error(
+                    error=f1.EmptyTranscriptError("PhoWhisper returned an empty question transcript"),
+                    stage="stt",
+                    timings=timings,
+                    request_started=request_started,
+                )
+
+        if not question_vi:
+            raise HTTPException(status_code=400, detail={"error": "missing_question_or_audio"})
 
         try:
-            question_en = translate_text(question, src_lang="vi")
+            question_en = translate_text(
+                question_vi,
+                src_lang="vi",
+                timings=timings,
+                timing_key="vi_to_en",
+            )
         except Exception as e:
             print(f"[Backend Error] Question translation failed: {e}")
             traceback.print_exc()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "qa_translation_failed",
-                    "stage": "question_vi_to_en",
-                    "message": str(e),
-                },
-            ) from e
+            _raise_feature1_error(
+                error=e,
+                stage="question_vi_to_en",
+                timings=timings,
+                request_started=request_started,
+            )
 
         try:
-            answer_en = run_vlm_question(tmp_image_path, question_en)
+            answer_en = run_vlm_question(tmp_image_path, question_en, timings=timings)
         except Exception as e:
             print(f"[Backend Error] QA inference failed: {e}")
-            traceback.print_exc()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "qa_inference_failed",
-                    "message": str(e),
-                },
-            ) from e
+            if not isinstance(e, f1.LlamaServerError):
+                traceback.print_exc()
+            _raise_feature1_error(
+                error=e,
+                stage="vlm",
+                timings=timings,
+                request_started=request_started,
+            )
 
         try:
-            answer_vi = translate_text(answer_en, src_lang="en")
+            answer_vi = translate_text(
+                answer_en,
+                src_lang="en",
+                timings=timings,
+                timing_key="en_to_vi",
+            )
         except Exception as e:
             print(f"[Backend Error] Answer translation failed: {e}")
             traceback.print_exc()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "qa_translation_failed",
-                    "stage": "answer_en_to_vi",
-                    "message": str(e),
-                },
-            ) from e
+            _raise_feature1_error(
+                error=e,
+                stage="answer_en_to_vi",
+                timings=timings,
+                request_started=request_started,
+            )
 
-        return {
+        audio_base64 = None
+        if return_audio or audio_was_input:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_answer:
+                tmp_answer_path = Path(tmp_answer.name)
+            tmp_paths.append(tmp_answer_path)
+            try:
+                synthesize_speech_vi(answer_vi, tmp_answer_path, timings=timings)
+                audio_base64 = base64.b64encode(tmp_answer_path.read_bytes()).decode("ascii")
+            except Exception as e:
+                print(f"[Backend Error] Piper TTS failed: {e}")
+                if not isinstance(e, f1.Feature1PipelineError):
+                    traceback.print_exc()
+                _raise_feature1_error(
+                    error=e,
+                    stage="tts",
+                    timings=timings,
+                    request_started=request_started,
+                )
+
+        timing_payload = _timing_payload(timings, request_started)
+        _log_timing("[Backend][Feature1] latency", timing_payload)
+        response = {
             "success": True,
-            "question": question,
+            "question": question_vi,
             "answer": answer_vi,
             "question_en": question_en,
             "answer_en": answer_en,
-            "model": VLM_MODELS["model_id"] if VLM_MODELS else "SmolVLM2",
-            "translation_model": TRANSLATE_MODELS["model_id"] if TRANSLATE_MODELS else "EnViT5",
+            "model": f1.get_llama_runtime_info(check_health=False)["model"],
+            "translation_model": f1.TRANSLATE_MODEL_PATH,
+            "timings": timing_payload,
         }
+        if audio_base64 is not None:
+            response["audio_base64"] = audio_base64
+            response["audio_mime"] = "audio/wav"
+        return response
 
     except HTTPException:
         raise
     except Exception as e:
         print(f"[Backend Error] QA failed: {e}")
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "qa_inference_failed",
-                "message": str(e),
-            },
+        _raise_feature1_error(
+            error=e,
+            stage="feature1",
+            timings=timings,
+            request_started=request_started,
         )
     finally:
-        if tmp_image_path and tmp_image_path.exists():
-            os.remove(tmp_image_path)
+        _delete_temp_files(tmp_paths)
 
 
 @app.post("/navigate")
-async def navigate_endpoint(
-    image: UploadFile = File(...),
-):
+async def navigate_endpoint(image: UploadFile = File(...)):
     """
-    Autopilot Guide / Navigation Endpoint:
-    Receives continuous camera frames (every 4s) and predicts obstacles/depth.
+    Feature 3 endpoint.
+
+    This remains intentionally separate from the Feature 1 GGUF integration.
     """
     suffix = Path(image.filename or "frame.jpg").suffix or ".jpg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -412,7 +416,6 @@ async def navigate_endpoint(
         tmp_path = Path(tmp.name)
 
     try:
-        # Check YOLO model
         yolo_path = MODELS_DIR / "yolo26s.pt"
         if not yolo_path.exists():
             yolo_path = BASE_DIR / "yolo26s.pt"
@@ -420,10 +423,15 @@ async def navigate_endpoint(
         if yolo_path.exists():
             try:
                 from ultralytics import YOLO
+
                 yolo = YOLO(str(yolo_path))
                 results = yolo(str(tmp_path))
                 boxes = results[0].boxes
-                labels = [results[0].names[int(cls)] for cls in boxes.cls.cpu().numpy()] if len(boxes) > 0 else []
+                labels = (
+                    [results[0].names[int(cls)] for cls in boxes.cls.cpu().numpy()]
+                    if len(boxes) > 0
+                    else []
+                )
                 if labels:
                     warning = f"Lưu ý, phát hiện {', '.join(set(labels))} ở phía trước."
                 else:
@@ -438,8 +446,8 @@ async def navigate_endpoint(
             os.remove(tmp_path)
 
 
-
 if __name__ == "__main__":
     import uvicorn
+
     print("Starting BSmart Backend Server on http://0.0.0.0:8000 ...")
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

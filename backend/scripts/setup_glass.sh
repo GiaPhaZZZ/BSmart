@@ -55,7 +55,8 @@ uv pip install --python "$PY" \
     soundfile \
     librosa \
     huggingface-hub \
-    ctranslate2
+    ctranslate2 \
+    requests
 
 # --- Piper TTS (replaces viet-tts) --------------------------------------
 uv pip install --python "$PY" piper-tts

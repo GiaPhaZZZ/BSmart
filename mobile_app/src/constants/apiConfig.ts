@@ -21,3 +21,18 @@ export const API_ENDPOINTS = {
 
 export const API_TIMEOUT_MS = 1500;
 export const API_VQA_TIMEOUT_MS = 90000;
+
+export type Feature1VlmMode = 'server' | 'on_device_onnx' | 'on_device_gguf';
+
+// Default stays server-backed so the experimental Android GGUF path cannot
+// change production Feature 1 behavior until it has real device evidence.
+export const FEATURE1_VLM_MODE: Feature1VlmMode = 'on_device_gguf';
+
+export const FEATURE1_GGUF_VLM = {
+  modelPath: '',
+  mmprojPath: '',
+  contextSize: 2048,
+  threads: 2,
+  maxTokens: 48,
+  temperature: 0,
+};

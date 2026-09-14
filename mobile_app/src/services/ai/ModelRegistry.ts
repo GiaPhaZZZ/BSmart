@@ -50,6 +50,15 @@ const DEFAULT_MODELS: Record<string, ModelInfo> = {
     status: 'UNINITIALIZED', // Set to READY at app runtime once native module available
     description: 'Multimodal Vision-Language model for Scene QA',
   },
+  smolvlm2_gguf: {
+    id: 'smolvlm2_gguf',
+    name: 'SmolVLM2-256M GGUF',
+    task: 'vlm',
+    filename: 'gguf/SmolVLM2-256M-Video-Instruct-Q8_0.gguf',
+    inputShape: [],
+    status: 'UNINITIALIZED',
+    description: 'Quantized GGUF Visual QA through llama.cpp/libmtmd on Android',
+  },
   yolo26s: {
     id: 'yolo26s',
     name: 'YOLO26s',

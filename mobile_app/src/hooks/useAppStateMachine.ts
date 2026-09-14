@@ -25,6 +25,8 @@ import {
   matchVoiceCommand,
   transcribeSpeech,
 } from '../services/ai/OnDeviceAsrService';
+import { askQAOnDevice } from '../services/ai/OnDeviceVlmService';
+import { askQAGgufOnDevice } from '../services/ai/OnDeviceGgufVlmService';
 import { askQA } from '../services/api/ApiService';
 import { modelRegistry } from '../services/ai/ModelRegistry';
 import { combinePcmChunksToWav } from '../services/audio/audioUtils';
@@ -61,6 +63,7 @@ import { NAVIGATION_FRAME_INTERVAL_MS } from '../constants/navigationRules';
 import { saveCapturedImage } from '../services/storage/ImageStorageService';
 import { MapboxService } from '../services/navigation/MapboxService';
 import { RouteGuide } from '../services/navigation/RouteGuide';
+import { FEATURE1_GGUF_VLM, FEATURE1_VLM_MODE } from '../constants/apiConfig';
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -619,24 +622,45 @@ export function useAppStateMachine(): AppStateMachineResult {
           throw new Error('Feature 1 VQA failed: no captured image available');
         }
 
-        console.log('[Feature1] Camera capture ready; sending server VQA request', {
+        console.log('[Feature1] Camera capture ready; running VQA request', {
           imageBytesApprox: Math.round((qaImage.length * 3) / 4),
           question,
+          mode: FEATURE1_VLM_MODE,
         });
-        addLog('Camera capture ready; sending server VQA request...');
-        const serverVqa = await askQA(qaImage, question);
+        addLog(`Camera capture ready; running VQA (${FEATURE1_VLM_MODE})...`);
+
+        const qaResult = FEATURE1_VLM_MODE === 'on_device_gguf'
+          ? await askQAGgufOnDevice(qaImage, question, FEATURE1_GGUF_VLM)
+          : FEATURE1_VLM_MODE === 'on_device_onnx'
+            ? await askQAOnDevice(qaImage, question)
+            : await askQA(qaImage, question);
+
         if (!isCurrentProcessing()) {
-          addLog('Bỏ qua phản hồi server cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
+          addLog('Bỏ qua phản hồi hỏi đáp cũ vì người dùng đã bắt đầu ghi âm mới', 'warn');
           return;
         }
-        const answer = serverVqa.answer;
-        console.log('[Feature1] Server VQA response', {
+
+        if ('isSuccess' in qaResult && !qaResult.isSuccess) {
+          const failureDetail = 'message' in qaResult
+            ? qaResult.message ?? qaResult.answer
+            : qaResult.answer;
+          throw new Error(
+            `Feature 1 VQA failed (${FEATURE1_VLM_MODE}): ${failureDetail}`,
+          );
+        }
+
+        const answer = qaResult.answer;
+        console.log('[Feature1] VQA response', {
           answer,
-          question_en: serverVqa.question_en,
-          answer_en: serverVqa.answer_en,
-          model: serverVqa.model,
+          question_en: 'question_en' in qaResult ? qaResult.question_en : undefined,
+          answer_en: 'answer_en' in qaResult ? qaResult.answer_en : undefined,
+          model: qaResult.model,
+          mode: FEATURE1_VLM_MODE,
         });
-        addLog(`Server VQA response: "${answer}"`);
+        if ('timings' in qaResult && qaResult.timings) {
+          console.log('[Feature1] VQA timings', qaResult.timings);
+        }
+        addLog(`VQA response: "${answer}"`);
 
         await speakViaBle(answer, bleService.current);
         transitionTo(AppState.FEATURE_1_QA); // Stay in QA

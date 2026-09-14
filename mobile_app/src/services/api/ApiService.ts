@@ -20,6 +20,21 @@ export interface QAResult {
   question_en?: string;
   answer_en?: string;
   model?: string;
+  timings?: {
+    model_load_s?: number;
+    asr_model_load_s?: number;
+    translation_model_load_s?: number;
+    piper_model_load_s?: number;
+    audio_preprocessing_s?: number;
+    stt_s?: number;
+    vi_to_en_s?: number;
+    image_preparation_s?: number;
+    vlm_s?: number;
+    en_to_vi_s?: number;
+    tts_s?: number;
+    other_network_s?: number;
+    total_s?: number;
+  };
 }
 
 async function fetchWithTimeout(
@@ -100,6 +115,7 @@ export async function askQA(
     timeoutMs: API_VQA_TIMEOUT_MS,
   });
 
+  const requestStartedAt = Date.now();
   const response = await fetchWithTimeout(
     API_ENDPOINTS.QA,
     {
@@ -111,10 +127,12 @@ export async function askQA(
     },
     API_VQA_TIMEOUT_MS,
   );
+  const clientElapsedMs = Date.now() - requestStartedAt;
 
   console.log('[Feature1][ServerVQA] HTTP response', {
     status: response.status,
     ok: response.ok,
+    elapsedMs: clientElapsedMs,
   });
 
   if (!response.ok) {
@@ -132,6 +150,18 @@ export async function askQA(
     throw new Error('QA failed: response missing answer');
   }
 
+  if (data.timings) {
+    const backendTotalMs = Number(data.timings.total_s) * 1000;
+    const networkApiOverheadMs = Number.isFinite(backendTotalMs)
+      ? Math.max(0, clientElapsedMs - backendTotalMs)
+      : clientElapsedMs;
+    console.log('[Feature1][ServerVQA] Latency', {
+      clientTotalMs: clientElapsedMs,
+      backendTimings: data.timings,
+      networkApiOverheadMs,
+    });
+  }
+
   console.log('[Feature1][ServerVQA] Parsed response', {
     answer: data.answer,
     question_en: data.question_en,
@@ -145,5 +175,6 @@ export async function askQA(
     question_en: data.question_en,
     answer_en: data.answer_en,
     model: data.model,
+    timings: data.timings,
   };
 }

@@ -24,6 +24,11 @@ import {
   transcribeAudioOnDevice,
 } from '../src/services/ai/OnDeviceAsrService';
 import { askQAOnDevice } from '../src/services/ai/OnDeviceVlmService';
+import {
+  askQAGgufOnDevice,
+  getGgufVlmStatus,
+  isGgufVlmModuleAvailable,
+} from '../src/services/ai/OnDeviceGgufVlmService';
 import { modelRegistry } from '../src/services/ai/ModelRegistry';
 import { AppState } from '../src/types';
 
@@ -190,5 +195,26 @@ describe('OnDeviceVlmService (MOD-02)', () => {
     const res = await askQAOnDevice('mockImage', 'Trước mặt tôi là gì?');
     expect(res.isSuccess).toBe(false);
     expect(res.answer).toContain('chưa sẵn sàng');
+  });
+
+  test('model registry includes separate SmolVLM2 GGUF entry', () => {
+    const ggufModel = modelRegistry.getModel('smolvlm2_gguf');
+    expect(ggufModel?.filename).toContain('SmolVLM2-256M-Video-Instruct-Q8_0.gguf');
+    expect(ggufModel?.status).toBe('UNINITIALIZED');
+  });
+
+  test('GGUF service reports unavailable honestly when native module is absent', async () => {
+    expect(isGgufVlmModuleAvailable()).toBe(false);
+    const status = await getGgufVlmStatus();
+    expect(status.runtimeAvailable).toBe(false);
+    expect(status.modelLoaded).toBe(false);
+    expect(status.message).toContain('not available');
+  });
+
+  test('GGUF service handles empty image input without fake answer', async () => {
+    const res = await askQAGgufOnDevice('', 'What is in front of me?');
+    expect(res.isSuccess).toBe(false);
+    expect(res.error).toBe('INVALID_IMAGE');
+    expect(res.answer).toContain('Không thể xử lý');
   });
 });

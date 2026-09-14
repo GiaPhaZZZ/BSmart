@@ -81,6 +81,17 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        externalNativeBuild {
+            cmake {
+                def llamaWithLlamaCpp = providers.gradleProperty("bsmartLlamaWithLlamaCpp").orElse("false").get()
+                def llamaCppDir = providers.gradleProperty("bsmartLlamaCppDir").orElse("").get()
+                arguments "-DBSMART_LLAMA_WITH_LLAMA_CPP=${llamaWithLlamaCpp}",
+                        "-DBSMART_LLAMA_CPP_DIR=${llamaCppDir}",
+                        "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
     }
     signingConfigs {
         debug {
@@ -114,6 +125,17 @@ android {
             includeAndroidResources = true
         }
     }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+            def nativeBuildDir = providers.gradleProperty("bsmartNativeBuildDir").orElse("").get()
+            if (!nativeBuildDir.trim().isEmpty()) {
+                buildStagingDirectory = file(nativeBuildDir)
+            }
+        }
+    }
 }
 
 dependencies {
@@ -131,4 +153,6 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
